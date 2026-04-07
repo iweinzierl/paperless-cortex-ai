@@ -56,9 +56,10 @@ The webapp is a management interface for users to configure the backend. Users a
 - an `SQLite` database is used to store state
 - the `Gin` framework is used to for the RESTful API layer
 - an internal `middleware` logs all incoming http requests and the corresponding http responses
+- `Zerolog` is used for logging across the backend. The loglevel can be configured using an environment variable (PAPERLESS_AIEXT_LOGLEVEL).
 - the backend uses token based authentication to access the paperless-ngx instance to fetch document metadata from paperless-ngx 
 - incoming http calls are authenticated using username:password from the paperless-ngx instance in a /api/auth call which returns a paperless-ngx session token upon successful authentication. This session token is most prominently used by the webapp to authenticate further API calls.
-- the backend implements a webhook which is called by paperless-ngx once a document is updated. Since the webhook in the workflow in paperless-ngx is called before the document is saved, the request is persisted in the queue and processed later. Authentication for this webhook endpoint is done through a shared secret set as http header (x-shared-secret) which is configured via environment variable in the backend.
+- the backend implements a webhook which is called by paperless-ngx once a document is updated. Since the webhook in the workflow in paperless-ngx is called before the document is saved, the request is persisted in the queue and processed later. Authentication for this webhook endpoint is done through a shared secret set as http header (x-shared-secret) which is configured via environment variable in the backend (PAPERLESS_AIEXT_SHARED_SECRET).
 
 ### Webapp
 - the webapp uses `flutter` as framework
