@@ -1,6 +1,9 @@
-.PHONY: ocr_screening ocr_vision_screening process_correspondents process_document_types process_tags
+.PHONY: backend ocr_screening ocr_vision_screening process_correspondents process_document_types process_tags
 
 OLLAMA_URL ?= http://localhost:11434
+
+backend:
+	go run ./backend
 
 ocr_screening:
 	@if [ -z "$(DOCUMENT)" ]; then echo "DOCUMENT is required. Usage: make ocr_screening DOCUMENT=/path/to/document MODEL=llama3.2-vision"; exit 1; fi
