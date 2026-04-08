@@ -1,2 +1,5 @@
 documents/**
 .vscode/launch.json
+backend/__debug_bin*
+backend/backend/data/paperless-aiext.db
+backend/backend/data/paperless-aiext.db-shm

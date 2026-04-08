@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,8 @@ import (
 
 func main() {
 	logger := newLogger()
+	enableOutgoingHTTPLogging(logger)
+	
 	listenAddr := envOrDefault("PAPERLESS_AIEXT_LISTEN_ADDR", ":8080")
 	databasePath := envOrDefault("PAPERLESS_AIEXT_DB_PATH", "backend/data/paperless-aiext.db")
 
@@ -64,13 +67,21 @@ func main() {
 
 func newLogger() zerolog.Logger {
 	level := zerolog.InfoLevel
-	if parsedLevel, err := zerolog.ParseLevel(strings.ToLower(strings.TrimSpace(os.Getenv("PAPERLESS_AIEXT_LOGLEVEL")))); err == nil {
-		level = parsedLevel
+	if rawLevel := strings.ToLower(strings.TrimSpace(os.Getenv("PAPERLESS_AIEXT_LOGLEVEL"))); rawLevel != "" {
+		if parsedLevel, err := zerolog.ParseLevel(rawLevel); err == nil {
+			level = parsedLevel
+		}
 	}
 
 	zerolog.SetGlobalLevel(level)
 	gin.SetMode(gin.ReleaseMode)
-	return zerolog.New(os.Stderr).With().Timestamp().Logger().Level(level)
+	
+	var writer io.Writer = os.Stderr
+	if strings.ToLower(strings.TrimSpace(os.Getenv("PAPERLESS_AIEXT_PRETTY_LOGS"))) == "true" {
+		writer = zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	}
+
+	return zerolog.New(writer).With().Timestamp().Logger().Level(level)
 }
 
 func envOrDefault(key string, fallback string) string {

@@ -1,7 +1,9 @@
 package main
 
-import "strings"
-
+import (
+	"os"
+	"strings"
+)
 type ProcessingMode string
 
 const (
@@ -48,6 +50,9 @@ func DefaultBackendConfig() BackendConfig {
 			ProcessingMode:            ProcessingModeManual,
 			ProcessingIntervalSeconds: 30,
 		},
+		Paperless: PaperlessConfig{
+			PaperlessURL: os.Getenv("PAPERLESS_URL"),
+		},
 		LLMs: LLMConfig{
 			OllamaURL: "http://localhost:11434",
 		},
@@ -72,6 +77,9 @@ func (cfg *BackendConfig) Normalize() {
 	cfg.Process.ProcessCompletedTag = strings.TrimSpace(cfg.Process.ProcessCompletedTag)
 
 	cfg.Paperless.PaperlessURL = strings.TrimSpace(cfg.Paperless.PaperlessURL)
+	if cfg.Paperless.PaperlessURL == "" {
+		cfg.Paperless.PaperlessURL = strings.TrimSpace(os.Getenv("PAPERLESS_URL"))
+	}
 	cfg.Paperless.PaperlessToken = strings.TrimSpace(cfg.Paperless.PaperlessToken)
 
 	cfg.LLMs.OllamaURL = strings.TrimSpace(cfg.LLMs.OllamaURL)

@@ -403,13 +403,13 @@ func buildPaperlessAuthURL(rawBaseURL string) (string, error) {
 	path := strings.TrimRight(parsed.Path, "/")
 	switch {
 	case path == "":
-		parsed.Path = "/api/auth/"
-	case strings.HasSuffix(path, "/api/auth"):
+		parsed.Path = "/api/token/"
+	case strings.HasSuffix(path, "/api/token"):
 		parsed.Path = path + "/"
 	case strings.HasSuffix(path, "/api"):
-		parsed.Path = path + "/auth/"
+		parsed.Path = path + "/token/"
 	default:
-		parsed.Path = path + "/api/auth/"
+		parsed.Path = path + "/api/token/"
 	}
 
 	return parsed.String(), nil
@@ -436,8 +436,8 @@ func requestIDMiddleware() gin.HandlerFunc {
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Shared-Secret")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "*")
+		c.Header("Access-Control-Allow-Methods", "*")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
