@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "tertiary-fixed-dim": "#78dc86",
+                    "primary-fixed": "#d8e2ff",
+                    "on-primary-fixed-variant": "#004493",
+                    "on-secondary-fixed-variant": "#42474e",
+                    "surface-container": "#eceef0",
+                    "inverse-on-surface": "#eff1f3",
+                    "surface-variant": "#e0e3e5",
+                    "error": "#ba1a1a",
+                    "surface": "#f8f9fb",
+                    "on-surface-variant": "#424753",
+                    "on-error-container": "#93000a",
+                    "surface-container-low": "#f2f4f6",
+                    "on-error": "#ffffff",
+                    "tertiary-fixed": "#94f99f",
+                    "on-secondary-fixed": "#171c22",
+                    "on-tertiary-container": "#c3ffc4",
+                    "tertiary": "#006326",
+                    "primary-container": "#0969da",
+                    "outline": "#727785",
+                    "on-primary-fixed": "#001a41",
+                    "surface-dim": "#d8dadc",
+                    "secondary-container": "#dee3eb",
+                    "surface-container-high": "#e6e8ea",
+                    "surface-container-highest": "#e0e3e5",
+                    "on-primary-container": "#ecefff",
+                    "secondary": "#5a5f66",
+                    "primary-fixed-dim": "#adc6ff",
+                    "on-secondary": "#ffffff",
+                    "secondary-fixed": "#dee3eb",
+                    "on-tertiary-fixed": "#002108",
+                    "primary": "#0051ae",
+                    "surface-container-lowest": "#ffffff",
+                    "on-tertiary-fixed-variant": "#00531e",
+                    "background": "#f8f9fb",
+                    "surface-tint": "#005bc0",
+                    "error-container": "#ffdad6",
+                    "on-primary": "#ffffff",
+                    "outline-variant": "#c2c6d6",
+                    "on-secondary-container": "#60656c",
+                    "inverse-primary": "#adc6ff",
+                    "inverse-surface": "#2d3133",
+                    "tertiary-container": "#0d7e34",
+                    "on-tertiary": "#ffffff",
+                    "surface-bright": "#f8f9fb",
+                    "secondary-fixed-dim": "#c2c7cf",
+                    "on-surface": "#191c1e",
+                    "on-background": "#191c1e"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "fontFamily": {
+                    "headline": ["Inter"],
+                    "body": ["Inter"],
+                    "label": ["Inter"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface">
+<!-- SideNavBar -->
+<aside class="h-full w-64 fixed left-0 top-0 bg-slate-100 dark:bg-slate-900 flex flex-col py-6 px-4 z-50">
+<div class="mb-10 px-2">
+<h1 class="font-black text-xl tracking-tighter text-slate-900 dark:text-white">Cortex Graphite</h1>
+<p class="text-[10px] uppercase tracking-widest text-slate-500 mt-1 font-bold">LLM Instance: Active</p>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors font-sans text-sm tracking-tight Inter" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span>Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-xl text-blue-700 dark:text-blue-400 font-semibold border-r-2 border-blue-700 dark:border-blue-400 bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors font-sans text-sm tracking-tight Inter" href="#">
+<span class="material-symbols-outlined" data-icon="queue">queue</span>
+<span>Queue</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors font-sans text-sm tracking-tight Inter" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>Configuration</span>
+</a>
+</nav>
+<div class="mt-auto pt-6 space-y-1 border-t border-slate-200 dark:border-slate-800">
+<button class="w-full mb-4 bg-gradient-to-br from-primary to-primary-container text-white py-2.5 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform">
+                New Prompt
+            </button>
+<a class="flex items-center gap-3 px-3 py-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors font-sans text-sm tracking-tight Inter" href="#">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+<span>Docs</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors font-sans text-sm tracking-tight Inter" href="#">
+<span class="material-symbols-outlined" data-icon="logout">logout</span>
+<span>Logout</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Shell -->
+<div class="ml-64 min-h-screen">
+<!-- TopNavBar -->
+<header class="fixed top-0 right-0 left-64 h-16 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md flex items-center justify-between px-8 w-full border-b border-slate-100 dark:border-slate-800 shadow-sm dark:shadow-none z-40">
+<div class="flex items-center flex-1">
+<div class="relative w-full max-w-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm" data-icon="search">search</span>
+<input class="w-full bg-surface-container-highest border-none rounded-xl py-2 pl-10 pr-4 text-sm focus:ring-1 focus:ring-primary transition-all placeholder:text-slate-400" placeholder="Search processing queue..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-4 text-slate-500">
+<button class="hover:text-blue-500 transition-colors scale-95 active:duration-75">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="hover:text-blue-500 transition-colors scale-95 active:duration-75">
+<span class="material-symbols-outlined" data-icon="dns">dns</span>
+</button>
+</div>
+<div class="flex items-center gap-3 pl-6 border-l border-slate-200 dark:border-slate-800">
+<div class="text-right">
+<p class="text-sm font-bold text-slate-900 dark:text-white leading-none">Administrator</p>
+<p class="text-[10px] text-slate-500">Superuser Access</p>
+</div>
+<img alt="Administrator" class="w-8 h-8 rounded-full border border-slate-200" data-alt="portrait of a professional male technologist in a minimal studio setting with clean lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCO10C_Oa0YYxmvypRASEAlxgCdYapJPck3Nx27mjCh5qHlrz9BLZRwPIYxhkYd65mWopAfhR4b3oj30vZa94hWNU18nlqOs2VL0iBbpGPA4PJRXHS54uMaXymbsl3pYGoBRdpr9qQEd_teYkL5OXblKUu3I01YN6T0IaJK30mU--VK_ctDyEaeL8OnCIp7jEXTeUnbxUN4381Sat5ummyshif9Hrm_k26kXPloHDdf32dwbK7ZlKeDQ-GLhkUtheGVfwKZW55yGik"/>
+</div>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="pt-24 pb-12 px-8">
+<div class="flex items-end justify-between mb-8">
+<div>
+<h2 class="text-2xl font-extrabold text-on-surface tracking-tight">Processing Queue</h2>
+<p class="text-sm text-on-surface-variant mt-1">Manage active document ingestions and backend LLM tasks.</p>
+</div>
+<div class="flex gap-3">
+<div class="flex items-center gap-2 px-3 py-1.5 bg-tertiary/10 text-tertiary rounded-full text-xs font-bold">
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+                        8 WORKERS ACTIVE
+                    </div>
+</div>
+</div>
+<!-- Stats Bar - Bento Style -->
+<div class="grid grid-cols-4 gap-4 mb-8">
+<div class="bg-surface-container-highest p-5 rounded-xl flex flex-col justify-between h-28">
+<span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pending Tasks</span>
+<span class="text-3xl font-black text-on-surface self-end">142</span>
+</div>
+<div class="bg-surface-container-highest p-5 rounded-xl flex flex-col justify-between h-28">
+<span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Processing</span>
+<div class="flex items-center gap-2 self-end">
+<span class="text-3xl font-black text-primary">12</span>
+</div>
+</div>
+<div class="bg-surface-container-highest p-5 rounded-xl flex flex-col justify-between h-28">
+<span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Success Rate</span>
+<span class="text-3xl font-black text-tertiary self-end">99.4%</span>
+</div>
+<div class="bg-surface-container-lowest border border-primary/10 p-5 rounded-xl flex flex-col justify-between h-28 shadow-sm">
+<span class="text-[10px] font-bold text-primary uppercase tracking-wider">Queue Health</span>
+<span class="text-3xl font-black text-on-surface self-end">Stable</span>
+</div>
+</div>
+<!-- Queue Table -->
+<div class="bg-surface-container-lowest rounded-xl shadow-sm overflow-hidden">
+<table class="w-full text-left border-separate border-spacing-0">
+<thead>
+<tr class="bg-surface-container-low">
+<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Title</th>
+<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Request Timestamp</th>
+<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Backend ID</th>
+<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Action</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-slate-50">
+<!-- Row 1 -->
+<tr class="hover:bg-surface transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-sm" data-icon="description">description</span>
+</div>
+<div>
+<p class="text-sm font-semibold text-on-surface">Annual_Report_2023_v4.pdf</p>
+<p class="text-[10px] text-slate-400">PDF Document • 4.2 MB</p>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<p class="text-sm text-on-surface-variant">Oct 24, 2023 · 14:22:01</p>
+<p class="text-[10px] text-slate-400">2 minutes ago</p>
+</td>
+<td class="px-6 py-4 text-right">
+<code class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">B-9921-XF</code>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="px-4 py-1.5 bg-gradient-to-br from-primary to-primary-container text-white text-xs font-bold rounded-lg shadow hover:shadow-md active:scale-95 transition-all">
+                                    Trigger Processing
+                                </button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-sm" data-icon="code">code</span>
+</div>
+<div>
+<p class="text-sm font-semibold text-on-surface">Client_Contract_Final.docx</p>
+<p class="text-[10px] text-slate-400">Word Document • 1.1 MB</p>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<p class="text-sm text-on-surface-variant">Oct 24, 2023 · 14:18:45</p>
+<p class="text-[10px] text-slate-400">6 minutes ago</p>
+</td>
+<td class="px-6 py-4 text-right">
+<code class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">B-8832-KL</code>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="px-4 py-1.5 bg-gradient-to-br from-primary to-primary-container text-white text-xs font-bold rounded-lg shadow hover:shadow-md active:scale-95 transition-all">
+                                    Trigger Processing
+                                </button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-surface transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-sm" data-icon="article">article</span>
+</div>
+<div>
+<p class="text-sm font-semibold text-on-surface">Internal_Knowledge_Base_Export.json</p>
+<p class="text-[10px] text-slate-400">JSON Dataset • 12.8 MB</p>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<p class="text-sm text-on-surface-variant">Oct 24, 2023 · 14:15:10</p>
+<p class="text-[10px] text-slate-400">9 minutes ago</p>
+</td>
+<td class="px-6 py-4 text-right">
+<code class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">B-7710-RT</code>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="px-4 py-1.5 bg-gradient-to-br from-primary to-primary-container text-white text-xs font-bold rounded-lg shadow hover:shadow-md active:scale-95 transition-all">
+                                    Trigger Processing
+                                </button>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="hover:bg-surface transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-sm" data-icon="table_chart">table_chart</span>
+</div>
+<div>
+<p class="text-sm font-semibold text-on-surface">User_Feedback_Q3.csv</p>
+<p class="text-[10px] text-slate-400">CSV Sheet • 0.5 MB</p>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<p class="text-sm text-on-surface-variant">Oct 24, 2023 · 14:10:33</p>
+<p class="text-[10px] text-slate-400">14 minutes ago</p>
+</td>
+<td class="px-6 py-4 text-right">
+<code class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">B-1029-QQ</code>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="px-4 py-1.5 bg-gradient-to-br from-primary to-primary-container text-white text-xs font-bold rounded-lg shadow hover:shadow-md active:scale-95 transition-all">
+                                    Trigger Processing
+                                </button>
+</td>
+</tr>
+</tbody>
+</table>
+<div class="px-6 py-4 bg-surface-container-low flex items-center justify-between">
+<p class="text-xs text-slate-500">Showing 4 of 142 pending documents</p>
+<div class="flex gap-2">
+<button class="p-1.5 rounded-lg border border-slate-200 text-slate-400 hover:bg-white transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="chevron_left">chevron_left</span>
+</button>
+<button class="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-white transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="chevron_right">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Console Log Overlay (Bottom Right Style) -->
+<div class="mt-12">
+<div class="flex items-center gap-2 mb-3">
+<span class="material-symbols-outlined text-primary text-lg" data-icon="terminal">terminal</span>
+<h3 class="text-xs font-black uppercase tracking-widest text-slate-500">Real-time Worker Logs</h3>
+</div>
+<div class="bg-slate-900 rounded-xl p-4 font-mono text-[11px] text-slate-300 leading-relaxed shadow-lg max-h-48 overflow-y-auto">
+<p><span class="text-slate-500">[14:22:05]</span> <span class="text-tertiary-fixed-dim">INFO:</span> Worker-04 assigned to document B-9921-XF</p>
+<p><span class="text-slate-500">[14:21:58]</span> <span class="text-tertiary-fixed-dim">INFO:</span> Embeddings generated for B-8832-KL (14/14 batches)</p>
+<p><span class="text-slate-500">[14:21:40]</span> <span class="text-primary-fixed-dim">DBUG:</span> Handshaking with backend vector store...</p>
+<p><span class="text-slate-500">[14:21:32]</span> <span class="text-error-container">WARN:</span> Throttling applied to node-07 due to high memory pressure</p>
+<p><span class="text-slate-500">[14:20:15]</span> <span class="text-tertiary-fixed-dim">INFO:</span> Successfully ingested 'Legal_Brief_Summary.pdf' (B-2210-WW)</p>
+</div>
+</div>
+</main>
+</div>
+</body></html>

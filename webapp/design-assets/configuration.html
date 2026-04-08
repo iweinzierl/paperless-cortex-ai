@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8f9fb;
+            color: #191c1e;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+        }
+        .primary-gradient {
+            background: linear-gradient(135deg, #0051ae 0%, #0969da 100%);
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: #0051ae;
+            background-color: #ffffff !important;
+        }
+        .ghost-border {
+            border: 1px solid rgba(194, 198, 214, 0.15);
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary-fixed-dim": "#78dc86",
+                        "primary-fixed": "#d8e2ff",
+                        "on-primary-fixed-variant": "#004493",
+                        "on-secondary-fixed-variant": "#42474e",
+                        "surface-container": "#eceef0",
+                        "inverse-on-surface": "#eff1f3",
+                        "surface-variant": "#e0e3e5",
+                        "error": "#ba1a1a",
+                        "surface": "#f8f9fb",
+                        "on-surface-variant": "#424753",
+                        "on-error-container": "#93000a",
+                        "surface-container-low": "#f2f4f6",
+                        "on-error": "#ffffff",
+                        "tertiary-fixed": "#94f99f",
+                        "on-secondary-fixed": "#171c22",
+                        "on-tertiary-container": "#c3ffc4",
+                        "tertiary": "#006326",
+                        "primary-container": "#0969da",
+                        "outline": "#727785",
+                        "on-primary-fixed": "#001a41",
+                        "surface-dim": "#d8dadc",
+                        "secondary-container": "#dee3eb",
+                        "surface-container-high": "#e6e8ea",
+                        "surface-container-highest": "#e0e3e5",
+                        "on-primary-container": "#ecefff",
+                        "secondary": "#5a5f66",
+                        "primary-fixed-dim": "#adc6ff",
+                        "on-secondary": "#ffffff",
+                        "secondary-fixed": "#dee3eb",
+                        "on-tertiary-fixed": "#002108",
+                        "primary": "#0051ae",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary-fixed-variant": "#00531e",
+                        "background": "#f8f9fb",
+                        "surface-tint": "#005bc0",
+                        "error-container": "#ffdad6",
+                        "on-primary": "#ffffff",
+                        "outline-variant": "#c2c6d6",
+                        "on-secondary-container": "#60656c",
+                        "inverse-primary": "#adc6ff",
+                        "inverse-surface": "#2d3133",
+                        "tertiary-container": "#0d7e34",
+                        "on-tertiary": "#ffffff",
+                        "surface-bright": "#f8f9fb",
+                        "secondary-fixed-dim": "#c2c7cf",
+                        "on-surface": "#191c1e",
+                        "on-background": "#191c1e"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-surface text-on-surface">
+<!-- SideNavBar -->
+<aside class="h-full w-64 fixed left-0 top-0 bg-slate-100 dark:bg-slate-900 flex flex-col py-6 px-4">
+<div class="mb-10 px-4">
+<h1 class="font-black text-xl tracking-tighter text-slate-900 dark:text-white">Cortex Graphite</h1>
+<p class="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold mt-1">LLM Instance: Active</p>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:scale-110 transition-transform">dashboard</span>
+<span class="font-sans text-sm tracking-tight">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:scale-110 transition-transform">queue</span>
+<span class="font-sans text-sm tracking-tight">Queue</span>
+</a>
+<!-- Active Tab: Configuration -->
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl text-blue-700 dark:text-blue-400 font-semibold border-r-2 border-blue-700 dark:border-blue-400 bg-slate-200/30" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">settings</span>
+<span class="font-sans text-sm tracking-tight">Configuration</span>
+</a>
+</nav>
+<div class="mt-auto space-y-1 border-t border-slate-200/50 pt-6">
+<button class="w-full mb-4 primary-gradient text-white py-3 rounded-xl font-bold text-sm shadow-sm hover:opacity-90 active:scale-95 transition-all">
+                New Prompt
+            </button>
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:text-slate-900 transition-colors group" href="#">
+<span class="material-symbols-outlined">help</span>
+<span class="font-sans text-sm">Docs</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:text-slate-900 transition-colors group" href="#">
+<span class="material-symbols-outlined">logout</span>
+<span class="font-sans text-sm">Logout</span>
+</a>
+</div>
+</aside>
+<!-- TopNavBar -->
+<header class="fixed top-0 right-0 left-64 h-16 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-slate-100 dark:border-slate-800 shadow-sm flex items-center justify-between px-8 w-full z-10">
+<div class="flex items-center gap-4 flex-1">
+<div class="relative w-full max-w-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">search</span>
+<input class="w-full bg-slate-50 border-none rounded-full pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-blue-100 transition-all" placeholder="Search system settings..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex gap-4 items-center">
+<button class="text-slate-500 hover:text-blue-600 transition-colors relative">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute top-0 right-0 w-2 h-2 bg-error rounded-full"></span>
+</button>
+<button class="text-slate-500 hover:text-blue-600 transition-colors">
+<span class="material-symbols-outlined">dns</span>
+</button>
+</div>
+<div class="h-8 w-[1px] bg-slate-200"></div>
+<div class="flex items-center gap-3">
+<div class="text-right">
+<p class="text-xs font-bold text-slate-900">Administrator</p>
+<p class="text-[10px] text-slate-500">System Root</p>
+</div>
+<img alt="Administrator" class="w-10 h-10 rounded-full border-2 border-white shadow-sm object-cover" data-alt="close-up portrait of a professional male administrator in a clean modern office setting with soft natural light" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAfU0eO9ovlHi2uR_OQWjgG1soMKQlUc9x73fb1mGskg8rkZVKG3lPcY6QrbmWrkoeaxwAaglQIB2jz7YEZOg1fhyrl6X5LXi67J0XidGQIpMgZORTfnywVa9zN-EBzCterqulIFrIn8C8KDOECc8dCEDKrT3sJQs_7HLkWmJT0cG4HQdoI6qW-YbxjBzFCyAahPcAws9UmVSvDsxd0N5-Oama4tCQClWws0Rrsy8kgLICDwVKRr3Jr6bw0-8RQMiPbJlxuPXpB7qM"/>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="ml-64 pt-24 pb-12 px-10">
+<!-- Editorial Header -->
+<div class="mb-12">
+<h2 class="text-3xl font-extrabold tracking-tight text-on-surface mb-2">System Configuration</h2>
+<p class="text-on-surface-variant max-w-2xl">Refine the operational parameters of the Cortex Graphite engine. These settings govern the orchestration between Paperless-ngx and local LLM instances.</p>
+</div>
+<div class="grid grid-cols-12 gap-8">
+<!-- SECTION 1: ENGINE -->
+<div class="col-span-12 lg:col-span-4 flex flex-col gap-8">
+<section class="bg-surface-container-lowest rounded-xl p-8 shadow-sm ghost-border">
+<div class="flex items-center gap-3 mb-8">
+<div class="p-2 bg-primary-fixed rounded-lg">
+<span class="material-symbols-outlined text-primary text-xl">settings_input_component</span>
+</div>
+<h3 class="text-lg font-bold tracking-tight">Engine</h3>
+</div>
+<div class="space-y-6">
+<div>
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant mb-2">Processing Mode</label>
+<select class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-medium">
+<option>Manual</option>
+<option selected="">Auto</option>
+</select>
+<p class="mt-2 text-[11px] text-slate-400">Determines if documents trigger analysis immediately.</p>
+</div>
+<div>
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant mb-2">Interval (Seconds)</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono" type="number" value="300"/>
+<p class="mt-2 text-[11px] text-slate-400">Frequency of queue synchronization.</p>
+</div>
+</div>
+</section>
+<!-- SECTION 3: PAPERLESS (Positioned for balance) -->
+<section class="bg-surface-container-lowest rounded-xl p-8 shadow-sm ghost-border">
+<div class="flex items-center gap-3 mb-8">
+<div class="p-2 bg-tertiary-fixed rounded-lg">
+<span class="material-symbols-outlined text-tertiary text-xl">description</span>
+</div>
+<h3 class="text-lg font-bold tracking-tight">Paperless-ngx</h3>
+</div>
+<div class="space-y-6">
+<div>
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant mb-2">API URL</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm" placeholder="https://paperless.local" type="url"/>
+</div>
+<div>
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant mb-2">API Token</label>
+<div class="relative">
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono pr-12" type="password" value="********************************"/>
+<span class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-slate-900">visibility</span>
+</div>
+</div>
+</div>
+</section>
+</div>
+<!-- SECTION 2: PROCESS (Central wide column) -->
+<div class="col-span-12 lg:col-span-8 flex flex-col gap-8">
+<section class="bg-surface-container-lowest rounded-xl p-8 shadow-sm ghost-border">
+<div class="flex items-center justify-between mb-8">
+<div class="flex items-center gap-3">
+<div class="p-2 bg-secondary-container rounded-lg">
+<span class="material-symbols-outlined text-secondary text-xl">label</span>
+</div>
+<h3 class="text-lg font-bold tracking-tight">Process Taxonomy</h3>
+</div>
+<span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full uppercase">Metadata Mapping</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+<div class="space-y-1">
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">trigger</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono focus:ring-1 focus:ring-primary" type="text" value="cortex:trigger"/>
+</div>
+<div class="space-y-1">
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">ocr</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono" type="text" value="cortex:ocr_raw"/>
+</div>
+<div class="space-y-1">
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">vision</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono" type="text" value="cortex:vision_tag"/>
+</div>
+<div class="space-y-1">
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">correspondent</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono" type="text" value="cortex:identified_sender"/>
+</div>
+<div class="space-y-1">
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">type</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono" type="text" value="cortex:doc_type"/>
+</div>
+<div class="space-y-1">
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">tags</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono" type="text" value="cortex:auto_tags"/>
+</div>
+<div class="col-span-full pt-4">
+<div class="space-y-1">
+<label class="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">completed</label>
+<input class="w-full bg-surface-container-highest border-none rounded-xl px-4 py-3 text-sm font-mono" type="text" value="cortex:processed_success"/>
+</div>
+</div>
+</div>
+</section>
+<!-- SECTION 4: LLMs -->
+<section class="bg-surface-container-lowest rounded-xl p-8 shadow-sm ghost-border">
+<div class="flex items-center gap-3 mb-8">
+<div class="p-2 bg-primary-fixed-dim rounded-lg">
+<span class="material-symbols-outlined text-primary text-xl">psychology</span>
+</div>
+<h3 class="text-lg font-bold tracking-tight">Intelligence Sources (Ollama)</h3>
+</div>
+<!-- LLM Prompt Console Style Layout -->
+<div class="space-y-6">
+<div class="relative overflow-hidden rounded-xl bg-surface-container-low p-6 border-l-4 border-surface-tint">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+<div class="space-y-6">
+<div>
+<label class="block text-[10px] font-black uppercase tracking-widest text-primary mb-2">Endpoint URL</label>
+<input class="w-full bg-surface-container-lowest border-none rounded-lg px-4 py-2 text-sm font-mono shadow-inner" type="text" value="http://localhost:11434"/>
+</div>
+<div>
+<label class="block text-[10px] font-black uppercase tracking-widest text-primary mb-2">Default LLM</label>
+<select class="w-full bg-surface-container-lowest border-none rounded-lg px-4 py-2 text-sm font-mono shadow-inner">
+<option>llama3:8b-instruct</option>
+<option selected="">mistral:latest</option>
+<option>gemma:7b</option>
+</select>
+</div>
+</div>
+<div class="flex flex-col justify-end">
+<div class="mb-auto">
+<label class="block text-[10px] font-black uppercase tracking-widest text-primary mb-2">Vision LLM</label>
+<select class="w-full bg-surface-container-lowest border-none rounded-lg px-4 py-2 text-sm font-mono shadow-inner">
+<option selected="">llava:latest</option>
+<option>bakllava:latest</option>
+</select>
+</div>
+<div class="mt-4 flex items-center gap-2 text-tertiary">
+<span class="w-2 h-2 rounded-full bg-tertiary animate-pulse"></span>
+<span class="text-[11px] font-bold uppercase tracking-tighter">Connection Stable</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Actions Footer -->
+<div class="flex justify-end gap-4">
+<button class="px-8 py-3 rounded-xl font-bold text-sm text-on-surface-variant hover:bg-surface-container-high transition-colors">
+                        Revert Changes
+                    </button>
+<button class="px-10 py-3 primary-gradient text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-200 hover:scale-[1.02] active:scale-95 transition-all">
+                        Commit Configuration
+                    </button>
+</div>
+</div>
+</div>
+</main>
+</body></html>
