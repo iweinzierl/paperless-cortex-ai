@@ -72,6 +72,31 @@ func TestPaperlessWebhookAcceptsJSONPayload(t *testing.T) {
 	}
 }
 
+func TestPaperlessWebhookAcceptsJSONStringWrappedPayload(t *testing.T) {
+	router, store := newWebhookTestRouter(t, "secret")
+	body := `"{\"document_title\":\"Invoice April\",\"document_url\":\"https://paperless.example/documents/42/details\"}"`
+
+	response := performWebhookRequest(t, router, http.MethodPost, "/api/webhooks/paperless", strings.NewReader(body), map[string]string{
+		"Content-Type":    "application/json",
+		"x-shared-secret": "secret",
+	})
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, response.Code, response.Body.String())
+	}
+
+	items, err := store.ListQueueItems(t.Context(), "", 10)
+	if err != nil {
+		t.Fatalf("list queue items: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 queue item, got %d", len(items))
+	}
+	if items[0].DocumentID == nil || *items[0].DocumentID != 42 {
+		t.Fatalf("expected document ID 42, got %+v", items[0].DocumentID)
+	}
+}
+
 func TestPaperlessWebhookReusesActiveQueueItem(t *testing.T) {
 	router, store := newWebhookTestRouter(t, "secret")
 	body := `{"document_title":"Invoice April","document_url":"https://paperless.example/documents/42/details"}`

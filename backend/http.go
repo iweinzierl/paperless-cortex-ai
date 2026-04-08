@@ -75,6 +75,19 @@ type paperlessWebhookRequest struct {
 	DocumentURL   string
 	Trigger       string
 	StoredPayload string
+	BodySize      int
+	BodyPreview   string
+}
+
+type webhookValidationError struct {
+	cause         error
+	detail        string
+	contentType   string
+	contentLength int64
+	bodySize      int
+	bodyPreview   string
+	documentURL   string
+	documentID    *int64
 }
 
 type storedWebhookPayload struct {
@@ -372,47 +385,65 @@ func (s *Server) handleListPaperlessTags(c *gin.Context) {
 }
 
 func (s *Server) handlePaperlessWebhook(c *gin.Context) {
+	requestLogger := s.requestLogger(c).With().
+		Str("client_ip", c.ClientIP()).
+		Str("webhook_content_type", normalizedContentType(c.GetHeader("Content-Type"))).
+		Int64("content_length", c.Request.ContentLength).
+		Bool("has_shared_secret_header", strings.TrimSpace(c.GetHeader("x-shared-secret")) != "").
+		Logger()
+
 	if s.sharedSecret == "" {
+		requestLogger.Error().Msg("paperless webhook rejected: shared secret is not configured")
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook shared secret is not configured"})
 		return
 	}
 
 	if subtle.ConstantTimeCompare([]byte(c.GetHeader("x-shared-secret")), []byte(s.sharedSecret)) != 1 {
+		requestLogger.Warn().Msg("paperless webhook rejected: invalid shared secret")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid shared secret"})
 		return
 	}
 
 	webhookRequest, err := parsePaperlessWebhookRequest(c)
 	if errors.Is(err, errWebhookUnsupportedMediaType) {
+		s.logWebhookValidationFailure(requestLogger, err)
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{
 			"error": "unsupported webhook content type; use application/json",
 		})
 		return
 	}
 	if errors.Is(err, errWebhookMissingDocumentURL) {
+		s.logWebhookValidationFailure(requestLogger, err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "webhook payload must include document_url",
 		})
 		return
 	}
 	if errors.Is(err, errWebhookInvalidDocumentURL) {
+		s.logWebhookValidationFailure(requestLogger, err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "webhook payload must include a document_url with an embedded numeric document ID",
 		})
 		return
 	}
 	if errors.Is(err, errWebhookInvalidPayload) {
+		s.logWebhookValidationFailure(requestLogger, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid webhook payload"})
 		return
 	}
 	if err != nil {
+		requestLogger.Error().Err(err).Msg("paperless webhook failed unexpectedly")
 		s.writeInternalError(c, err)
 		return
 	}
 
-	logEvent := s.logger.Info().
+	logEvent := requestLogger.Info().
 		Str("webhook_content_type", webhookRequest.ContentType).
+		Int("body_size", webhookRequest.BodySize).
 		Str("document_url", webhookRequest.DocumentURL)
+	if webhookRequest.BodyPreview != "" {
+		logEvent = logEvent.Str("body_preview", webhookRequest.BodyPreview)
+	}
 	if webhookRequest.DocumentID != nil {
 		logEvent = logEvent.Int64("document_id", *webhookRequest.DocumentID)
 	}
@@ -480,19 +511,74 @@ func (s *Server) loggingMiddleware() gin.HandlerFunc {
 
 		requestID, _ := c.Get("request_id")
 		event := s.logger.Info()
-		if len(c.Errors) > 0 || c.Writer.Status() >= http.StatusBadRequest {
+		switch {
+		case len(c.Errors) > 0 || c.Writer.Status() >= http.StatusInternalServerError:
 			event = s.logger.Error()
+		case c.Writer.Status() >= http.StatusBadRequest:
+			event = s.logger.Warn()
 		}
 
-		event.
+		event = event.
 			Str("request_id", fmt.Sprint(requestID)).
 			Str("method", c.Request.Method).
 			Str("path", c.Request.URL.Path).
 			Int("status", c.Writer.Status()).
 			Dur("latency", time.Since(startedAt)).
 			Str("client_ip", c.ClientIP()).
-			Msg("http request completed")
+			Str("user_agent", c.Request.UserAgent()).
+			Int64("content_length", c.Request.ContentLength)
+		if rawQuery := strings.TrimSpace(c.Request.URL.RawQuery); rawQuery != "" {
+			event = event.Str("query", rawQuery)
+		}
+		if contentType := normalizedContentType(c.GetHeader("Content-Type")); contentType != "" {
+			event = event.Str("content_type", contentType)
+		}
+		if len(c.Errors) > 0 {
+			event = event.Strs("errors", c.Errors.Errors())
+		}
+
+		event.Msg("http request completed")
 	}
+}
+
+func (s *Server) requestLogger(c *gin.Context) zerolog.Logger {
+	requestID, _ := c.Get("request_id")
+
+	return s.logger.With().
+		Str("request_id", fmt.Sprint(requestID)).
+		Str("method", c.Request.Method).
+		Str("path", c.Request.URL.Path).
+		Logger()
+}
+
+func (s *Server) logWebhookValidationFailure(logger zerolog.Logger, err error) {
+	event := logger.Warn().Err(err)
+	var validationErr *webhookValidationError
+	if errors.As(err, &validationErr) {
+		if validationErr.contentType != "" {
+			event = event.Str("webhook_content_type", validationErr.contentType)
+		}
+		if validationErr.contentLength >= 0 {
+			event = event.Int64("content_length", validationErr.contentLength)
+		}
+		if validationErr.bodySize > 0 {
+			event = event.Int("body_size", validationErr.bodySize)
+		}
+		if validationErr.bodyPreview != "" {
+			event = event.Str("body_preview", validationErr.bodyPreview)
+		}
+		if validationErr.documentURL != "" {
+			event = event.Str("document_url", validationErr.documentURL)
+		}
+		if validationErr.documentID != nil {
+			event = event.Int64("document_id", *validationErr.documentID)
+		}
+		if validationErr.detail != "" {
+			event = event.Str("reason", validationErr.detail)
+		}
+	}
+
+	event.Msg("paperless webhook rejected")
 }
 
 func (s *Server) writeInternalError(c *gin.Context, err error) {
@@ -618,10 +704,11 @@ func mustSession(c *gin.Context) Session {
 
 func parsePaperlessWebhookRequest(c *gin.Context) (*paperlessWebhookRequest, error) {
 	contentType := normalizedContentType(c.GetHeader("Content-Type"))
+	contentLength := c.Request.ContentLength
 
 	switch contentType {
 	case "", "application/json", "text/json":
-		request, err := parseJSONWebhookRequest(c.Request, contentType)
+		request, err := parseJSONWebhookRequest(c.Request, contentType, contentLength)
 		if err != nil {
 			return nil, err
 		}
@@ -629,39 +716,96 @@ func parsePaperlessWebhookRequest(c *gin.Context) (*paperlessWebhookRequest, err
 	default:
 		trimmedType := strings.TrimSpace(contentType)
 		if trimmedType == "" {
-			return parseJSONWebhookRequest(c.Request, "application/json")
+			return parseJSONWebhookRequest(c.Request, "application/json", contentLength)
 		}
-		return nil, errWebhookUnsupportedMediaType
+		return nil, &webhookValidationError{
+			cause:         errWebhookUnsupportedMediaType,
+			detail:        fmt.Sprintf("unsupported content type %q", trimmedType),
+			contentType:   trimmedType,
+			contentLength: contentLength,
+		}
 	}
 }
 
-func parseJSONWebhookRequest(request *http.Request, contentType string) (*paperlessWebhookRequest, error) {
+func parseJSONWebhookRequest(request *http.Request, contentType string, contentLength int64) (*paperlessWebhookRequest, error) {
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read webhook body: %w", err)
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
-		return nil, errWebhookInvalidPayload
+		return nil, &webhookValidationError{
+			cause:         errWebhookInvalidPayload,
+			detail:        "request body is empty",
+			contentType:   contentType,
+			contentLength: contentLength,
+			bodySize:      len(body),
+		}
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(body))
+	normalizedBody, err := normalizeJSONStringWebhookPayload(body)
+	if err != nil {
+		return nil, &webhookValidationError{
+			cause:         errWebhookInvalidPayload,
+			detail:        fmt.Sprintf("json string payload decode failed: %v", err),
+			contentType:   contentType,
+			contentLength: contentLength,
+			bodySize:      len(body),
+			bodyPreview:   summarizeWebhookBody(body),
+		}
+	}
+
+	bodyPreview := summarizeWebhookBody(normalizedBody)
+
+	decoder := json.NewDecoder(bytes.NewReader(normalizedBody))
 	decoder.UseNumber()
 
 	var payload paperlessWebhookPayload
 	if err := decoder.Decode(&payload); err != nil {
-		return nil, errWebhookInvalidPayload
+		return nil, &webhookValidationError{
+			cause:         errWebhookInvalidPayload,
+			detail:        fmt.Sprintf("json decode failed: %v", err),
+			contentType:   contentType,
+			contentLength: contentLength,
+			bodySize:      len(body),
+			bodyPreview:   bodyPreview,
+		}
 	}
 	if decoder.More() {
-		return nil, errWebhookInvalidPayload
+		return nil, &webhookValidationError{
+			cause:         errWebhookInvalidPayload,
+			detail:        "json payload contains multiple top-level values",
+			contentType:   contentType,
+			contentLength: contentLength,
+			bodySize:      len(body),
+			bodyPreview:   bodyPreview,
+		}
 	}
 
 	documentURL := strings.TrimSpace(payload.DocumentURL)
 	if documentURL == "" {
-		return nil, errWebhookMissingDocumentURL
+		return nil, &webhookValidationError{
+			cause:         errWebhookMissingDocumentURL,
+			detail:        "document_url is missing or empty",
+			contentType:   contentType,
+			contentLength: contentLength,
+			bodySize:      len(body),
+			bodyPreview:   bodyPreview,
+		}
 	}
 
 	documentID, err := extractDocumentIDFromURL(documentURL)
 	if err != nil {
+		if errors.Is(err, errWebhookInvalidDocumentURL) {
+			return nil, &webhookValidationError{
+				cause:         errWebhookInvalidDocumentURL,
+				detail:        fmt.Sprintf("document_url %q does not include an embedded numeric document id", documentURL),
+				contentType:   contentType,
+				contentLength: contentLength,
+				bodySize:      len(body),
+				bodyPreview:   bodyPreview,
+				documentURL:   documentURL,
+			}
+		}
 		return nil, err
 	}
 
@@ -686,7 +830,61 @@ func parseJSONWebhookRequest(request *http.Request, contentType string) (*paperl
 		DocumentURL:   documentURL,
 		Trigger:       "webhook",
 		StoredPayload: string(storedPayload),
+		BodySize:      len(body),
+		BodyPreview:   bodyPreview,
 	}, nil
+}
+
+func (e *webhookValidationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.detail) != "" {
+		return e.detail
+	}
+	if e.cause != nil {
+		return e.cause.Error()
+	}
+	return "webhook validation failed"
+}
+
+func normalizeJSONStringWebhookPayload(body []byte) ([]byte, error) {
+	trimmedBody := bytes.TrimSpace(body)
+	if len(trimmedBody) == 0 || trimmedBody[0] != '"' {
+		return body, nil
+	}
+
+	var payload string
+	if err := json.Unmarshal(trimmedBody, &payload); err != nil {
+		return nil, err
+	}
+
+	decoded := strings.TrimSpace(payload)
+	if decoded == "" {
+		return body, nil
+	}
+
+	return []byte(decoded), nil
+}
+
+func (e *webhookValidationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.cause
+}
+
+func summarizeWebhookBody(body []byte) string {
+	trimmed := strings.Join(strings.Fields(strings.TrimSpace(string(body))), " ")
+	if trimmed == "" {
+		return ""
+	}
+	if len(trimmed) <= 512 {
+		return trimmed
+	}
+
+	return trimmed[:512] + "..."
 }
 
 func extractDocumentIDFromURL(rawDocumentURL string) (*int64, error) {
