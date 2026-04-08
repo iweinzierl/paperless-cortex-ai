@@ -130,4 +130,12 @@ class ApiService {
     await _handleErrors(response);
     return QueueItem.fromJson(jsonDecode(response.body));
   }
+  Future<OllamaModelsResponse> getModels() async {
+    final response = await http.get(
+      Uri.parse(baseUrl + '/models'),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+    return OllamaModelsResponse.fromJson(jsonDecode(response.body));
+  }
 }

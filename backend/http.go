@@ -39,6 +39,28 @@ type loginResponse struct {
 	ExpiresAtMS int64  `json:"expires_at_ms"`
 }
 
+type ollamaModelDetails struct {
+	ParentModel       string   `json:"parent_model"`
+	Format            string   `json:"format"`
+	Family            string   `json:"family"`
+	Families          []string `json:"families"`
+	ParameterSize     string   `json:"parameter_size"`
+	QuantizationLevel string   `json:"quantization_level"`
+}
+
+type ollamaModel struct {
+	Name       string             `json:"name"`
+	Model      string             `json:"model"`
+	ModifiedAt string             `json:"modified_at"`
+	Size       int64              `json:"size"`
+	Digest     string             `json:"digest"`
+	Details    ollamaModelDetails `json:"details"`
+}
+
+type ollamaModelsResponse struct {
+	Models []ollamaModel `json:"models"`
+}
+
 type webhookPayload struct {
 	DocumentID *int64 `json:"document_id,omitempty"`
 	ID         *int64 `json:"id,omitempty"`
@@ -79,6 +101,7 @@ func (s *Server) Router() *gin.Engine {
 	authenticated.GET("/queue", s.handleListQueue)
 	authenticated.POST("/queue/:id/process", s.handleProcessQueueItem)
 	authenticated.GET("/dashboard", s.handleDashboard)
+	authenticated.GET("/models", s.handleListModels)
 
 	return router
 }
@@ -229,6 +252,49 @@ func (s *Server) handleDashboard(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, stats)
+}
+
+func (s *Server) handleListModels(c *gin.Context) {
+	cfg, err := s.store.LoadConfig(c.Request.Context())
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	if cfg.LLMs.OllamaURL == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ollama is not configured"})
+		return
+	}
+
+	tagsURL := fmt.Sprintf("%s/api/tags", strings.TrimRight(cfg.LLMs.OllamaURL, "/"))
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tagsURL, nil)
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to connect to ollama API"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("ollama API returned status %s", resp.Status)})
+		return
+	}
+
+	var payload ollamaModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to decode ollama API response"})
+		return
+	}
+
+	c.JSON(http.StatusOK, payload)
 }
 
 func (s *Server) handlePaperlessWebhook(c *gin.Context) {

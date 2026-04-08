@@ -257,6 +257,86 @@ class DashboardStats {
   }
 }
 
+class OllamaModelDetails {
+  final String parentModel;
+  final String format;
+  final String family;
+  final List<String> families;
+  final String parameterSize;
+  final String quantizationLevel;
+
+  OllamaModelDetails({
+    required this.parentModel,
+    required this.format,
+    required this.family,
+    required this.families,
+    required this.parameterSize,
+    required this.quantizationLevel,
+  });
+
+  factory OllamaModelDetails.fromJson(Map<String, dynamic> json) {
+    var rawFamilies = json['families'];
+    List<String> fams = [];
+    if (rawFamilies is List) {
+      fams = rawFamilies.map((e) => _asString(e) ?? '').toList();
+    }
+    return OllamaModelDetails(
+      parentModel: _asString(json['parent_model']) ?? '',
+      format: _asString(json['format']) ?? '',
+      family: _asString(json['family']) ?? '',
+      families: fams,
+      parameterSize: _asString(json['parameter_size']) ?? '',
+      quantizationLevel: _asString(json['quantization_level']) ?? '',
+    );
+  }
+}
+
+class OllamaModel {
+  final String name;
+  final String model;
+  final String modifiedAt;
+  final int size;
+  final String digest;
+  final OllamaModelDetails? details;
+
+  OllamaModel({
+    required this.name,
+    required this.model,
+    required this.modifiedAt,
+    required this.size,
+    required this.digest,
+    this.details,
+  });
+
+  factory OllamaModel.fromJson(Map<String, dynamic> json) {
+    return OllamaModel(
+      name: _asString(json['name']) ?? '',
+      model: _asString(json['model']) ?? '',
+      modifiedAt: _asString(json['modified_at']) ?? '',
+      size: _asInt(json['size']) ?? 0,
+      digest: _asString(json['digest']) ?? '',
+      details: json['details'] != null
+          ? OllamaModelDetails.fromJson(json['details'])
+          : null,
+    );
+  }
+}
+
+class OllamaModelsResponse {
+  final List<OllamaModel> models;
+
+  OllamaModelsResponse({required this.models});
+
+  factory OllamaModelsResponse.fromJson(Map<String, dynamic> json) {
+    var rawModels = json['models'];
+    List<OllamaModel> mods = [];
+    if (rawModels is List) {
+      mods = rawModels.map((e) => OllamaModel.fromJson(e)).toList();
+    }
+    return OllamaModelsResponse(models: mods);
+  }
+}
+
 String? _asString(dynamic val) {
   if (val == null) return null;
   return val.toString();

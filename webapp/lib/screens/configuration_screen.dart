@@ -34,6 +34,8 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
   String _processingMode = 'manual';
   String _defaultLlm = 'mistral:latest';
   String _visionLlm = 'llava:latest';
+  List<String> _availableModels = [];
+  bool _ollamaHealthy = false;
 
   @override
   void initState() {
@@ -51,8 +53,21 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
     try {
       final api = context.read<ApiService>();
       final config = await api.getConfig();
+      
+      bool isHealthy = false;
+      List<String> availableMods = [];
+      try {
+        final modelsResp = await api.getModels();
+        availableMods = modelsResp.models.map((m) => m.name).toList();
+        isHealthy = true;
+      } catch (e) {
+        print("Failed to fetch models: \$e");
+      }
+
       if (mounted) {
         setState(() {
+          _ollamaHealthy = isHealthy;
+          _availableModels = availableMods;
           _processingMode = config.engine.processingMode;
           _intervalController.text = config.engine.processingIntervalSeconds
               .toString();
@@ -354,11 +369,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                                     const SizedBox(height: 24),
                                     _buildInnerDropdown(
                                       'DEFAULT LLM',
-                                      [
-                                        'llama3:8b-instruct',
-                                        'mistral:latest',
-                                        'gemma:7b',
-                                      ],
+                                      _availableModels,
                                       _defaultLlm,
                                       (v) => _defaultLlm = v!,
                                     ),
@@ -373,7 +384,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                                   children: [
                                     _buildInnerDropdown(
                                       'VISION LLM',
-                                      ['llava:latest', 'bakllava:latest'],
+                                      _availableModels,
                                       _visionLlm,
                                       (v) => _visionLlm = v!,
                                     ),
@@ -383,18 +394,24 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                                         Container(
                                           width: 8,
                                           height: 8,
-                                          decoration: const BoxDecoration(
-                                            color: TailwindColors.tertiary,
+                                          decoration: BoxDecoration(
+                                            color: _ollamaHealthy
+                                                ? TailwindColors.tertiary
+                                                : TailwindColors.error,
                                             shape: BoxShape.circle,
                                           ),
                                         ),
                                         const SizedBox(width: 8),
-                                        const Text(
-                                          'CONNECTION STABLE',
+                                        Text(
+                                          _ollamaHealthy
+                                              ? 'CONNECTION STABLE'
+                                              : 'CONNECTION ERROR',
                                           style: TextStyle(
                                             fontSize: 11,
                                             fontWeight: FontWeight.bold,
-                                            color: TailwindColors.tertiary,
+                                            color: _ollamaHealthy
+                                                ? TailwindColors.tertiary
+                                                : TailwindColors.error,
                                             letterSpacing: 0.5,
                                           ),
                                         ),
