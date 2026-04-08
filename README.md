@@ -61,6 +61,20 @@ The webapp is a management interface for users to configure the backend. Users a
 - incoming http calls are authenticated using username:password from the paperless-ngx instance in a /api/auth call which returns a paperless-ngx session token upon successful authentication. This session token is most prominently used by the webapp to authenticate further API calls.
 - the backend implements a webhook which is called by paperless-ngx once a document is updated. Since the webhook in the workflow in paperless-ngx is called before the document is saved, the request is persisted in the queue and processed later. Authentication for this webhook endpoint is done through a shared secret set as http header (x-shared-secret) which is configured via environment variable in the backend (PAPERLESS_AIEXT_SHARED_SECRET).
 
+### Backend Webhook Interface
+- endpoint: POST /api/webhooks/paperless
+- authentication: the x-shared-secret header must match PAPERLESS_AIEXT_SHARED_SECRET
+- accepted content type: application/json
+- request body: the JSON payload must include document_title and document_url
+- document identity: the backend derives the Paperless document ID from document_url so duplicate webhook deliveries for the same document can reuse the active queue item
+- behavior: a valid request is queued with HTTP 202 Accepted; if an active queue item already exists for the same document, the existing item is reused and HTTP 202 is returned with reused=true
+- invalid requests: unsupported content types return HTTP 415, missing or invalid shared secrets return HTTP 401, malformed payloads, missing document_url, or document_url values without an embedded numeric document ID return HTTP 400
+
+Recommended paperless-ngx workflow configuration:
+- send the webhook as JSON
+- set document_title to the document title and document_url to the Paperless document URL
+- set the x-shared-secret header in the paperless webhook action so the backend can authenticate the request
+
 ### Webapp
 - the webapp uses `flutter` as framework
 - calls to the server use a paperless-ngx session token for authentication

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -20,6 +22,11 @@ import (
 )
 
 const sessionTTL = 24 * time.Hour
+
+var errWebhookUnsupportedMediaType = errors.New("unsupported webhook content type")
+var errWebhookInvalidPayload = errors.New("invalid webhook payload")
+var errWebhookMissingDocumentURL = errors.New("webhook payload does not include a document url")
+var errWebhookInvalidDocumentURL = errors.New("webhook payload includes an invalid document url")
 
 type Server struct {
 	store        *Store
@@ -61,14 +68,26 @@ type ollamaModelsResponse struct {
 	Models []ollamaModel `json:"models"`
 }
 
-type webhookPayload struct {
-	DocumentID *int64 `json:"document_id,omitempty"`
-	ID         *int64 `json:"id,omitempty"`
-	Document   *struct {
-		ID    *int64 `json:"id,omitempty"`
-		Title string `json:"title,omitempty"`
-	} `json:"document,omitempty"`
-	Title string `json:"title,omitempty"`
+type paperlessWebhookRequest struct {
+	ContentType   string
+	DocumentID    *int64
+	DocumentTitle string
+	DocumentURL   string
+	Trigger       string
+	StoredPayload string
+}
+
+type storedWebhookPayload struct {
+	ContentType   string         `json:"content_type"`
+	DocumentID    *int64         `json:"document_id,omitempty"`
+	DocumentTitle string         `json:"document_title,omitempty"`
+	DocumentURL   string         `json:"document_url,omitempty"`
+	JSON          map[string]any `json:"json,omitempty"`
+}
+
+type paperlessWebhookPayload struct {
+	DocumentTitle string `json:"document_title"`
+	DocumentURL   string `json:"document_url"`
 }
 
 type documentTag struct {
@@ -358,47 +377,71 @@ func (s *Server) handlePaperlessWebhook(c *gin.Context) {
 		return
 	}
 
-	if c.GetHeader("x-shared-secret") != s.sharedSecret {
+	if subtle.ConstantTimeCompare([]byte(c.GetHeader("x-shared-secret")), []byte(s.sharedSecret)) != 1 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid shared secret"})
 		return
 	}
 
-	body, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read webhook body"})
+	webhookRequest, err := parsePaperlessWebhookRequest(c)
+	if errors.Is(err, errWebhookUnsupportedMediaType) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{
+			"error": "unsupported webhook content type; use application/json",
+		})
 		return
 	}
-
-	var payload webhookPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if errors.Is(err, errWebhookMissingDocumentURL) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "webhook payload must include document_url",
+		})
+		return
+	}
+	if errors.Is(err, errWebhookInvalidDocumentURL) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "webhook payload must include a document_url with an embedded numeric document ID",
+		})
+		return
+	}
+	if errors.Is(err, errWebhookInvalidPayload) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid webhook payload"})
 		return
 	}
-
-	documentID := extractDocumentID(payload)
-	if documentID != nil {
-		existing, err := s.store.FindActiveQueueItemByDocumentID(c.Request.Context(), *documentID)
-		if err != nil {
-			s.writeInternalError(c, err)
-			return
-		}
-		if existing != nil {
-			c.JSON(http.StatusAccepted, gin.H{"item": existing, "reused": true})
-			return
-		}
-	}
-
-	title := extractDocumentTitle(payload)
-	if title == "" {
-		title = "Untitled document"
-	}
-
-	item, err := s.store.CreateQueueItem(c.Request.Context(), documentID, title, "paperless", "webhook", string(body))
 	if err != nil {
 		s.writeInternalError(c, err)
 		return
 	}
 
+	logEvent := s.logger.Info().
+		Str("webhook_content_type", webhookRequest.ContentType).
+		Str("document_url", webhookRequest.DocumentURL)
+	if webhookRequest.DocumentID != nil {
+		logEvent = logEvent.Int64("document_id", *webhookRequest.DocumentID)
+	}
+
+	if webhookRequest.DocumentID != nil {
+		existing, err := s.store.FindActiveQueueItemByDocumentID(c.Request.Context(), *webhookRequest.DocumentID)
+		if err != nil {
+			s.writeInternalError(c, err)
+			return
+		}
+		if existing != nil {
+			logEvent.Bool("reused", true).Int64("queue_item_id", existing.ID).Msg("reused queued paperless webhook")
+			c.JSON(http.StatusAccepted, gin.H{"item": existing, "reused": true})
+			return
+		}
+	}
+
+	title := webhookRequest.DocumentTitle
+	if title == "" {
+		title = "Untitled document"
+	}
+
+	item, err := s.store.CreateQueueItem(c.Request.Context(), webhookRequest.DocumentID, title, "paperless", webhookRequest.Trigger, webhookRequest.StoredPayload)
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	logEvent.Bool("reused", false).Int64("queue_item_id", item.ID).Msg("queued paperless webhook")
 	c.JSON(http.StatusAccepted, gin.H{"item": item, "reused": false})
 }
 
@@ -573,26 +616,134 @@ func mustSession(c *gin.Context) Session {
 	return session
 }
 
-func extractDocumentID(payload webhookPayload) *int64 {
-	if payload.DocumentID != nil {
-		return payload.DocumentID
+func parsePaperlessWebhookRequest(c *gin.Context) (*paperlessWebhookRequest, error) {
+	contentType := normalizedContentType(c.GetHeader("Content-Type"))
+
+	switch contentType {
+	case "", "application/json", "text/json":
+		request, err := parseJSONWebhookRequest(c.Request, contentType)
+		if err != nil {
+			return nil, err
+		}
+		return request, nil
+	default:
+		trimmedType := strings.TrimSpace(contentType)
+		if trimmedType == "" {
+			return parseJSONWebhookRequest(c.Request, "application/json")
+		}
+		return nil, errWebhookUnsupportedMediaType
 	}
-	if payload.ID != nil {
-		return payload.ID
+}
+
+func parseJSONWebhookRequest(request *http.Request, contentType string) (*paperlessWebhookRequest, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read webhook body: %w", err)
 	}
-	if payload.Document != nil && payload.Document.ID != nil {
-		return payload.Document.ID
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return nil, errWebhookInvalidPayload
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+
+	var payload paperlessWebhookPayload
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, errWebhookInvalidPayload
+	}
+	if decoder.More() {
+		return nil, errWebhookInvalidPayload
+	}
+
+	documentURL := strings.TrimSpace(payload.DocumentURL)
+	if documentURL == "" {
+		return nil, errWebhookMissingDocumentURL
+	}
+
+	documentID, err := extractDocumentIDFromURL(documentURL)
+	if err != nil {
+		return nil, err
+	}
+
+	storedPayload, err := json.Marshal(storedWebhookPayload{
+		ContentType:   contentType,
+		DocumentID:    documentID,
+		DocumentTitle: strings.TrimSpace(payload.DocumentTitle),
+		DocumentURL:   documentURL,
+		JSON: map[string]any{
+			"document_title": strings.TrimSpace(payload.DocumentTitle),
+			"document_url":   documentURL,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal stored webhook payload: %w", err)
+	}
+
+	return &paperlessWebhookRequest{
+		ContentType:   contentType,
+		DocumentID:    documentID,
+		DocumentTitle: strings.TrimSpace(payload.DocumentTitle),
+		DocumentURL:   documentURL,
+		Trigger:       "webhook",
+		StoredPayload: string(storedPayload),
+	}, nil
+}
+
+func extractDocumentIDFromURL(rawDocumentURL string) (*int64, error) {
+	trimmedURL := strings.TrimSpace(rawDocumentURL)
+	if trimmedURL == "" {
+		return nil, errWebhookMissingDocumentURL
+	}
+
+	parsedURL, err := url.Parse(trimmedURL)
+	if err != nil {
+		return nil, errWebhookInvalidDocumentURL
+	}
+
+	for _, candidate := range []string{parsedURL.Path, parsedURL.Fragment} {
+		if parsedID := extractDocumentIDFromPathLike(candidate); parsedID != nil {
+			return parsedID, nil
+		}
+	}
+
+	return nil, errWebhookInvalidDocumentURL
+}
+
+func extractDocumentIDFromPathLike(rawPath string) *int64 {
+	replacer := strings.NewReplacer("#", "/", "?", "/", "&", "/", "=", "/")
+	segments := strings.Split(replacer.Replace(strings.TrimSpace(rawPath)), "/")
+	for index, segment := range segments {
+		if strings.TrimSpace(segment) != "documents" {
+			continue
+		}
+		for nextIndex := index + 1; nextIndex < len(segments); nextIndex++ {
+			trimmed := strings.TrimSpace(segments[nextIndex])
+			if trimmed == "" {
+				continue
+			}
+			parsedID, err := strconv.ParseInt(trimmed, 10, 64)
+			if err == nil {
+				return &parsedID
+			}
+			break
+		}
 	}
 
 	return nil
 }
 
-func extractDocumentTitle(payload webhookPayload) string {
-	if payload.Document != nil && strings.TrimSpace(payload.Document.Title) != "" {
-		return strings.TrimSpace(payload.Document.Title)
+func normalizedContentType(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
 	}
 
-	return strings.TrimSpace(payload.Title)
+	mediaType, _, err := mime.ParseMediaType(trimmed)
+	if err != nil {
+		return strings.ToLower(trimmed)
+	}
+
+	return strings.ToLower(mediaType)
 }
 
 func randomHex(size int) string {
