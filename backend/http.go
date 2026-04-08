@@ -71,6 +71,16 @@ type webhookPayload struct {
 	Title string `json:"title,omitempty"`
 }
 
+type documentTag struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type paperlessTagsResponse struct {
+	Count   int           `json:"count"`
+	Results []documentTag `json:"results"`
+}
+
 func NewServer(store *Store, processor *Processor, logger zerolog.Logger, sharedSecret string) *Server {
 	return &Server{
 		store:        store,
@@ -102,6 +112,7 @@ func (s *Server) Router() *gin.Engine {
 	authenticated.POST("/queue/:id/process", s.handleProcessQueueItem)
 	authenticated.GET("/dashboard", s.handleDashboard)
 	authenticated.GET("/models", s.handleListModels)
+	authenticated.GET("/paperless/tags", s.handleListPaperlessTags)
 
 	return router
 }
@@ -295,6 +306,50 @@ func (s *Server) handleListModels(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, payload)
+}
+
+func (s *Server) handleListPaperlessTags(c *gin.Context) {
+	cfg, err := s.store.LoadConfig(c.Request.Context())
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	if cfg.Paperless.PaperlessURL == "" || cfg.Paperless.PaperlessToken == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "paperless is not fully configured"})
+		return
+	}
+
+	tagsURL := fmt.Sprintf("%s/api/tags/", strings.TrimRight(cfg.Paperless.PaperlessURL, "/"))
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tagsURL, nil)
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Token %s", cfg.Paperless.PaperlessToken))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to connect to paperless API"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("paperless API returned status %s", resp.Status)})
+		return
+	}
+
+	var payload paperlessTagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to decode paperless API response"})
+		return
+	}
+
+	c.JSON(http.StatusOK, payload.Results)
 }
 
 func (s *Server) handlePaperlessWebhook(c *gin.Context) {

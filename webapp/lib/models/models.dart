@@ -322,6 +322,23 @@ class OllamaModel {
   }
 }
 
+class DocumentTag {
+  final int id;
+  final String name;
+
+  DocumentTag({
+    required this.id,
+    required this.name,
+  });
+
+  factory DocumentTag.fromJson(Map<String, dynamic> json) {
+    return DocumentTag(
+      id: _asInt(json['id']) ?? 0,
+      name: _asString(json['name']) ?? '',
+    );
+  }
+}
+
 class OllamaModelsResponse {
   final List<OllamaModel> models;
 

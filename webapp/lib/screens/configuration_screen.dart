@@ -35,6 +35,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
   String _defaultLlm = 'mistral:latest';
   String _visionLlm = 'llava:latest';
   List<String> _availableModels = [];
+  List<DocumentTag> _availableTags = [];
   bool _ollamaHealthy = false;
 
   @override
@@ -61,13 +62,21 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
         availableMods = modelsResp.models.map((m) => m.name).toList();
         isHealthy = true;
       } catch (e) {
-        print("Failed to fetch models: \$e");
+        print("Failed to fetch models: $e");
+      }
+
+      List<DocumentTag> availableTags = [];
+      try {
+        availableTags = await api.getPaperlessTags();
+      } catch (e) {
+        print("Failed to fetch paperless tags: $e");
       }
 
       if (mounted) {
         setState(() {
           _ollamaHealthy = isHealthy;
           _availableModels = availableMods;
+          _availableTags = availableTags;
           _processingMode = config.engine.processingMode;
           _intervalController.text = config.engine.processingIntervalSeconds
               .toString();
@@ -278,7 +287,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: _buildInputField(
+                              child: _buildTagAutocompleteField(
                                 'TRIGGER',
                                 null,
                                 _triggerController,
@@ -286,7 +295,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                             ),
                             const SizedBox(width: 32),
                             Expanded(
-                              child: _buildInputField(
+                              child: _buildTagAutocompleteField(
                                 'OCR',
                                 null,
                                 _ocrController,
@@ -298,7 +307,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: _buildInputField(
+                              child: _buildTagAutocompleteField(
                                 'VISION',
                                 null,
                                 _visionController,
@@ -306,7 +315,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                             ),
                             const SizedBox(width: 32),
                             Expanded(
-                              child: _buildInputField(
+                              child: _buildTagAutocompleteField(
                                 'CORRESPONDENT',
                                 null,
                                 _corrController,
@@ -318,7 +327,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: _buildInputField(
+                              child: _buildTagAutocompleteField(
                                 'TYPE',
                                 null,
                                 _typeController,
@@ -326,7 +335,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                             ),
                             const SizedBox(width: 32),
                             Expanded(
-                              child: _buildInputField(
+                              child: _buildTagAutocompleteField(
                                 'TAGS',
                                 null,
                                 _tagsController,
@@ -335,7 +344,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                           ],
                         ),
                         const SizedBox(height: 24),
-                        _buildInputField('COMPLETED', null, _compController),
+                        _buildTagAutocompleteField('COMPLETED', null, _compController),
                       ],
                     ),
                     const SizedBox(height: 32),
@@ -604,6 +613,104 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                   )
                 : null,
           ),
+        ),
+        if (hint != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              hint,
+              style: const TextStyle(
+                fontSize: 11,
+                color: TailwindColors.outline,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTagAutocompleteField(
+    String label,
+    String? hint,
+    TextEditingController controller,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: TailwindColors.onSurfaceVariant,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(height: 8),
+        RawAutocomplete<String>(
+          textEditingController: controller,
+          focusNode: FocusNode(),
+          optionsBuilder: (TextEditingValue textEditingValue) {
+            if (textEditingValue.text.isEmpty) {
+              return const Iterable<String>.empty();
+            }
+            return _availableTags
+                .map((t) => t.name)
+                .where((name) => name.toLowerCase().contains(textEditingValue.text.toLowerCase()));
+          },
+          fieldViewBuilder: (context, fieldTextEditingController, fieldFocusNode, onFieldSubmitted) {
+            return TextField(
+              controller: fieldTextEditingController,
+              focusNode: fieldFocusNode,
+              onSubmitted: (String value) {
+                onFieldSubmitted();
+              },
+              style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: TailwindColors.surfaceContainerHighest,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 16,
+                ),
+              ),
+            );
+          },
+          optionsViewBuilder: (context, onSelected, options) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                elevation: 4,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  width: 300,
+                  decoration: BoxDecoration(
+                    color: TailwindColors.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(8),
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    itemBuilder: (context, index) {
+                      final option = options.elementAt(index);
+                      return InkWell(
+                        onTap: () => onSelected(option),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(option, style: const TextStyle(fontFamily: 'monospace')),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
         ),
         if (hint != null)
           Padding(

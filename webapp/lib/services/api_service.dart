@@ -138,4 +138,14 @@ class ApiService {
     await _handleErrors(response);
     return OllamaModelsResponse.fromJson(jsonDecode(response.body));
   }
+
+  Future<List<DocumentTag>> getPaperlessTags() async {
+    final response = await http.get(
+      Uri.parse(baseUrl + '/paperless/tags'),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+    final data = jsonDecode(response.body) as List;
+    return data.map((e) => DocumentTag.fromJson(e)).toList();
+  }
 }
