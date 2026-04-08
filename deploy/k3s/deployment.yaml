@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paperless-ai-ext-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: paperless-ai-ext
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: paperless-ai-ext
+        app.kubernetes.io/component: backend
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: backend
+          image: ghcr.io/iweinzierl/paperless-ai-ext-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PAPERLESS_AIEXT_DB_PATH
+              value: /data/paperless-aiext.db
+          envFrom:
+            - configMapRef:
+                name: paperless-ai-ext-config
+            - secretRef:
+                name: paperless-ai-ext-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: paperless-ai-ext-data

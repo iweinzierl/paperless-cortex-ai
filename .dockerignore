@@ -1,0 +1,12 @@
+.git
+.gitignore
+.vscode
+
+documents
+webapp
+
+backend/data
+
+*.db
+*.db-shm
+*.db-wal

@@ -9,6 +9,54 @@ This project is supposed to become an extension of paperless-ngx (https://github
 ## Backend
 Users must configure a set of tags. The backend observes document changes and the set tags. If the tag **process_trigger_tag** is set, the backend starts processing the document. The processing steps will be determined through further tags: **force_ocr_tag**, **force_vision_tag**, **process_correspondent_tag**, **process_document_type_tag**, **process_document_tags_tag**. If the processing of a document is completed, the **process_completed_tag** is set and the **process_trigger_tag** is unset.
 
+### Container Build
+You can build and push a multi-architecture backend container image for deployment to k3s with:
+
+```sh
+make docker_backend_multiarch IMAGE=ghcr.io/<owner>/paperless-ai-ext TAG=latest
+```
+
+The target uses Docker Buildx, builds for `linux/amd64` and `linux/arm64` by default, and pushes the resulting manifest list to your registry. You can override the platform set through `DOCKER_PLATFORMS` and the Dockerfile path through `DOCKERFILE`.
+
+The container exposes port `8080` and stores its SQLite database at `/data/paperless-aiext.db`, so for k3s you should mount `/data` on persistent storage.
+
+You can build and push the webapp container image with:
+
+```sh
+make docker_webapp_multiarch IMAGE=ghcr.io/<owner>/paperless-ai-ext-webapp TAG=latest
+```
+
+The webapp is built as a static Flutter web bundle and served by nginx. It calls the backend through the same host on `/api`.
+
+### k3s Deployment
+The repository includes a k3s manifest set for the backend under `deploy/k3s`.
+
+Before applying it, update these files:
+
+- `deploy/k3s/deployment.yaml` - set the backend image to the registry and tag you pushed.
+- `deploy/k3s/webapp-deployment.yaml` - set the webapp image to the registry and tag you pushed.
+- `deploy/k3s/configmap.yaml` - set `PAPERLESS_URL` to your paperless-ngx instance URL.
+- `deploy/k3s/secret.yaml` - replace `PAPERLESS_AIEXT_SHARED_SECRET` with a real shared secret.
+- `deploy/k3s/ingress.yaml` - set the hostname you want Traefik to expose for both the UI and API.
+
+Apply the manifests with:
+
+```sh
+make k3s_apply
+```
+
+Or directly with:
+
+```sh
+kubectl apply -k deploy/k3s
+```
+
+The default PVC uses the `local-path` storage class that ships with k3s. The deployment is intentionally configured as a single replica with a `Recreate` strategy because the backend stores state in SQLite on a `ReadWriteOnce` volume.
+
+If your image registry is private, add an `imagePullSecrets` entry to the pod spec in `deploy/k3s/deployment.yaml`.
+
+The ingress serves the Flutter webapp on `/` and forwards `/api` to the backend service, so the browser talks to the API over the same origin.
+
 ### Configuration
 The backend's engine must be configured by users. The configuration is structured in the following sections:
 

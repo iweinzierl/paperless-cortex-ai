@@ -12,7 +12,10 @@ class ApiException implements Exception {
 }
 
 class ApiService {
-  static const String baseUrl = 'http://localhost:8080/api';
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: '/api',
+  );
 
   SharedPreferences? _prefs;
 
@@ -130,6 +133,7 @@ class ApiService {
     await _handleErrors(response);
     return QueueItem.fromJson(jsonDecode(response.body));
   }
+
   Future<OllamaModelsResponse> getModels() async {
     final response = await http.get(
       Uri.parse(baseUrl + '/models'),

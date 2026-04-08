@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: paperless-ai-ext-backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: paperless-ai-ext
+    app.kubernetes.io/component: backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
