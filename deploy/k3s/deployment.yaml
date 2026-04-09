@@ -28,6 +28,8 @@ spec:
           env:
             - name: PAPERLESS_AIEXT_DB_PATH
               value: /data/paperless-aiext.db
+            - name: TMPDIR
+              value: /tmp
           envFrom:
             - configMapRef:
                 name: paperless-ai-ext-config
@@ -36,6 +38,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             httpGet:
               path: /api/health
@@ -65,3 +69,5 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: paperless-ai-ext-data
+        - name: tmp
+          emptyDir: {}
