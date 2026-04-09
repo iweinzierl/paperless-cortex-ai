@@ -63,20 +63,22 @@ class PaperlessAiExtApp extends StatelessWidget {
           routes: <RouteBase>[
             GoRoute(
               path: '/dashboard',
-              builder: (BuildContext context, GoRouterState state) {
-                return const DashboardScreen();
+              pageBuilder: (BuildContext context, GoRouterState state) {
+                return const NoTransitionPage<void>(child: DashboardScreen());
               },
             ),
             GoRoute(
               path: '/queue',
-              builder: (BuildContext context, GoRouterState state) {
-                return const QueueScreen();
+              pageBuilder: (BuildContext context, GoRouterState state) {
+                return const NoTransitionPage<void>(child: QueueScreen());
               },
             ),
             GoRoute(
               path: '/configuration',
-              builder: (BuildContext context, GoRouterState state) {
-                return const ConfigurationScreen();
+              pageBuilder: (BuildContext context, GoRouterState state) {
+                return const NoTransitionPage<void>(
+                  child: ConfigurationScreen(),
+                );
               },
             ),
           ],

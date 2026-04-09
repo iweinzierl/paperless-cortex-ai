@@ -28,6 +28,7 @@ class _QueueScreenState extends State<QueueScreen> {
   Timer? _drawerCleanupTimer;
   QueueItem? _selectedResultItem;
   bool _isResultDrawerOpen = false;
+  int? _removingItemId;
 
   @override
   void initState() {
@@ -117,6 +118,83 @@ class _QueueScreenState extends State<QueueScreen> {
     }
   }
 
+  Future<void> _removeItem(QueueItem item) async {
+    if (_removingItemId != null) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Remove queue item?'),
+          content: Text(
+            'This removes "${item.documentTitle}" from the queue history. Processing items cannot be removed while they are running.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: TailwindColors.error,
+                foregroundColor: TailwindColors.onError,
+              ),
+              child: const Text('Remove'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _removingItemId = item.id;
+    });
+
+    try {
+      final api = context.read<ApiService>();
+      await api.deleteQueueItem(item.id);
+
+      if (!mounted) {
+        return;
+      }
+
+      _drawerCleanupTimer?.cancel();
+      setState(() {
+        _items = _removeQueueItem(_items, item.id);
+        _activeItems = _removeQueueItem(_activeItems, item.id);
+        if (_selectedResultItem?.id == item.id) {
+          _selectedResultItem = null;
+          _isResultDrawerOpen = false;
+        }
+        _removingItemId = null;
+      });
+      _syncPolling();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Removed "${item.documentTitle}" from the queue.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _removingItemId = null;
+      });
+      final errorMessage = e is ApiException ? e.message : e.toString();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Remove failed: $errorMessage')));
+    }
+  }
+
   void _syncPolling() {
     final shouldPoll = _activeItems.isNotEmpty;
     if (!shouldPoll) {
@@ -195,6 +273,10 @@ class _QueueScreenState extends State<QueueScreen> {
     }
 
     return updated;
+  }
+
+  List<QueueItem> _removeQueueItem(List<QueueItem> items, int id) {
+    return items.where((entry) => entry.id != id).toList();
   }
 
   @override
@@ -446,7 +528,7 @@ class _QueueScreenState extends State<QueueScreen> {
                             flex: 2,
                             child: Text('RETRIES', style: _tableHeaderStyle()),
                           ),
-                          const SizedBox(width: 88), // actions spacer
+                          const SizedBox(width: 120), // actions spacer
                         ],
                       ),
                     ),
@@ -534,6 +616,12 @@ class _QueueScreenState extends State<QueueScreen> {
             item: _selectedResultItem,
             isOpen: _isResultDrawerOpen,
             onClose: _closeResultDrawer,
+            onRemove: _selectedResultItem != null
+                ? () => _removeItem(_selectedResultItem!)
+                : null,
+            isRemoving:
+                _selectedResultItem != null &&
+                _removingItemId == _selectedResultItem!.id,
           ),
         ),
       ],
@@ -885,8 +973,28 @@ class _QueueScreenState extends State<QueueScreen> {
     return labels.join('  •  ');
   }
 
+  Widget _buildRequestedStagePill(ProcessingStageProgress stage) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: TailwindColors.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        stage.label,
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: TailwindColors.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
   Widget _buildQueueRow(QueueItem item) {
     final canOpenDetails = item.canViewResultDetails;
+    final isRemoving = _removingItemId == item.id;
+    final requestedStages = item.requestedStages;
     Color statusColor;
     Color statusBgColor;
     switch (item.status) {
@@ -940,6 +1048,16 @@ class _QueueScreenState extends State<QueueScreen> {
                     color: TailwindColors.onSurfaceVariant,
                   ),
                 ),
+                if (requestedStages.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: requestedStages
+                        .map(_buildRequestedStagePill)
+                        .toList(),
+                  ),
+                ],
               ],
             ),
           ),
@@ -990,24 +1108,29 @@ class _QueueScreenState extends State<QueueScreen> {
             ),
           ),
           SizedBox(
-            width: 88,
-            child: item.status == 'pending'
-                ? IconButton(
+            width: 120,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (item.status == 'pending')
+                  IconButton(
                     icon: const Icon(
                       Icons.play_arrow,
                       size: 20,
                       color: TailwindColors.primary,
                     ),
-                    tooltip: 'Process Now',
+                    tooltip: 'Process now',
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
-                    onPressed: () => _processItem(item.id),
+                    onPressed: isRemoving ? null : () => _processItem(item.id),
                   )
-                : item.status == 'failed'
-                ? Align(
-                    alignment: Alignment.centerLeft,
+                else if (item.status == 'failed')
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
                     child: OutlinedButton.icon(
-                      onPressed: () => _processItem(item.id),
+                      onPressed: isRemoving
+                          ? null
+                          : () => _processItem(item.id),
                       icon: const Icon(
                         Icons.refresh,
                         size: 16,
@@ -1035,8 +1158,27 @@ class _QueueScreenState extends State<QueueScreen> {
                         visualDensity: VisualDensity.compact,
                       ),
                     ),
-                  )
-                : null,
+                  ),
+                if (item.canRemoveFromQueue)
+                  IconButton(
+                    onPressed: isRemoving ? null : () => _removeItem(item),
+                    tooltip: 'Remove from queue',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: isRemoving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(
+                            Icons.delete_outline,
+                            size: 22,
+                            color: TailwindColors.error,
+                          ),
+                  ),
+              ],
+            ),
           ),
         ],
       ),

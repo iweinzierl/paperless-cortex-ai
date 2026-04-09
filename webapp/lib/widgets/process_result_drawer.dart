@@ -1,20 +1,27 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:webapp/models/models.dart';
 import 'package:webapp/theme.dart';
 
-const processResultDrawerTransitionDuration = Duration(milliseconds: 220);
+const processResultDrawerTransitionDuration = Duration(milliseconds: 1000);
+const processResultDrawerSlideCurve = Curves.easeInOutCubicEmphasized;
 
 class ProcessResultDrawer extends StatelessWidget {
   final QueueItem? item;
   final bool isOpen;
   final VoidCallback onClose;
+  final VoidCallback? onRemove;
+  final bool isRemoving;
 
   const ProcessResultDrawer({
     super.key,
     required this.item,
     required this.isOpen,
     required this.onClose,
+    this.onRemove,
+    this.isRemoving = false,
   });
 
   @override
@@ -39,38 +46,103 @@ class ProcessResultDrawer extends StatelessWidget {
           Positioned.fill(
             child: GestureDetector(
               onTap: onClose,
-              child: AnimatedOpacity(
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 0, end: isOpen ? 1 : 0),
                 duration: processResultDrawerTransitionDuration,
-                curve: Curves.easeOut,
-                opacity: isOpen ? 1.0 : 0.0,
-                child: Container(color: Colors.black.withValues(alpha: 0.30)),
+                curve: Curves.easeOutCubic,
+                builder: (context, value, child) {
+                  return ClipRect(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(
+                        sigmaX: 10 * value,
+                        sigmaY: 10 * value,
+                      ),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Color.lerp(
+                            Colors.transparent,
+                            const Color(0x7A0B1220),
+                            value,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ),
           Align(
             alignment: Alignment.centerRight,
-            child: AnimatedSlide(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0, end: isOpen ? 1 : 0),
               duration: processResultDrawerTransitionDuration,
-              curve: Curves.easeOutCubic,
-              offset: isOpen ? Offset.zero : const Offset(1, 0),
-              child: AnimatedOpacity(
-                duration: processResultDrawerTransitionDuration,
-                curve: Curves.easeOut,
-                opacity: isOpen ? 1.0 : 0.0,
+              curve: processResultDrawerSlideCurve,
+              builder: (context, value, child) {
+                final slideOffset = Offset(1.08 * (1 - value), 0);
+                final scale = 0.975 + (0.025 * value);
+                return FractionalTranslation(
+                  translation: slideOffset,
+                  child: Transform.scale(
+                    scale: scale,
+                    alignment: Alignment.centerRight,
+                    child: Opacity(opacity: value, child: child),
+                  ),
+                );
+              },
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  boxShadow: [
+                    BoxShadow(
+                      color: Color(0x30000000),
+                      blurRadius: 40,
+                      offset: Offset(-12, 0),
+                    ),
+                  ],
+                ),
                 child: Container(
                   width: drawerWidth,
                   height: double.infinity,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     color: TailwindColors.surfaceContainerLowest,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Color(0x24000000),
-                        blurRadius: 32,
-                        offset: Offset(-8, 0),
+                    border: Border(
+                      left: BorderSide(
+                        color: TailwindColors.primary.withValues(alpha: 0.14),
+                      ),
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        child: IgnorePointer(
+                          child: Container(
+                            width: 18,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                                colors: [
+                                  TailwindColors.primary.withValues(
+                                    alpha: 0.10,
+                                  ),
+                                  Colors.transparent,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      _DrawerBody(
+                        item: item!,
+                        onClose: onClose,
+                        onRemove: onRemove,
+                        isRemoving: isRemoving,
                       ),
                     ],
                   ),
-                  child: _DrawerBody(item: item!, onClose: onClose),
                 ),
               ),
             ),
@@ -84,8 +156,15 @@ class ProcessResultDrawer extends StatelessWidget {
 class _DrawerBody extends StatelessWidget {
   final QueueItem item;
   final VoidCallback onClose;
+  final VoidCallback? onRemove;
+  final bool isRemoving;
 
-  const _DrawerBody({required this.item, required this.onClose});
+  const _DrawerBody({
+    required this.item,
+    required this.onClose,
+    this.onRemove,
+    required this.isRemoving,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -130,11 +209,29 @@ class _DrawerBody extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: onClose,
-                icon: const Icon(Icons.close),
-                color: TailwindColors.onSurfaceVariant,
-                tooltip: 'Close',
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (onRemove != null && item.canRemoveFromQueue)
+                    IconButton(
+                      onPressed: isRemoving ? null : onRemove,
+                      icon: isRemoving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.delete_outline, size: 22),
+                      color: TailwindColors.error,
+                      tooltip: 'Remove from queue',
+                    ),
+                  IconButton(
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close),
+                    color: TailwindColors.onSurfaceVariant,
+                    tooltip: 'Close',
+                  ),
+                ],
               ),
             ],
           ),

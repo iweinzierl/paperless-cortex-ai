@@ -18,6 +18,7 @@ const sqliteBusyTimeoutMS = 5000
 
 var errQueueItemNotRetryable = errors.New("queue item is not retryable")
 var errQueueItemNotFound = errors.New("queue item not found")
+var errQueueItemNotRemovable = errors.New("queue item is not removable")
 var errNoPendingQueueItems = errors.New("no pending queue items")
 
 type Store struct {
@@ -33,23 +34,24 @@ type Session struct {
 }
 
 type QueueItem struct {
-	ID                   int64  `json:"id"`
-	DocumentID           *int64 `json:"document_id,omitempty"`
-	DocumentTitle        string `json:"document_title"`
-	Source               string `json:"source"`
-	Trigger              string `json:"trigger"`
-	Status               string `json:"status"`
-	Payload              string `json:"payload,omitempty"`
-	RequestedAtMS        int64  `json:"requested_at_ms"`
-	StartedAtMS          *int64 `json:"started_at_ms,omitempty"`
-	CompletedAtMS        *int64 `json:"completed_at_ms,omitempty"`
-	Attempts             int    `json:"attempts"`
-	LastError            string `json:"last_error,omitempty"`
-	ResultSummary        string `json:"result_summary,omitempty"`
-	ResultPayload        string `json:"result_payload,omitempty"`
-	UsedLLM              string `json:"used_llm,omitempty"`
-	UsedVisionLLM        string `json:"used_vision_llm,omitempty"`
-	ProcessingDurationMS *int64 `json:"processing_duration_ms,omitempty"`
+	ID                   int64    `json:"id"`
+	DocumentID           *int64   `json:"document_id,omitempty"`
+	DocumentTitle        string   `json:"document_title"`
+	Source               string   `json:"source"`
+	Trigger              string   `json:"trigger"`
+	Status               string   `json:"status"`
+	Payload              string   `json:"payload,omitempty"`
+	RequestedStages      []string `json:"requested_stages,omitempty"`
+	RequestedAtMS        int64    `json:"requested_at_ms"`
+	StartedAtMS          *int64   `json:"started_at_ms,omitempty"`
+	CompletedAtMS        *int64   `json:"completed_at_ms,omitempty"`
+	Attempts             int      `json:"attempts"`
+	LastError            string   `json:"last_error,omitempty"`
+	ResultSummary        string   `json:"result_summary,omitempty"`
+	ResultPayload        string   `json:"result_payload,omitempty"`
+	UsedLLM              string   `json:"used_llm,omitempty"`
+	UsedVisionLLM        string   `json:"used_vision_llm,omitempty"`
+	ProcessingDurationMS *int64   `json:"processing_duration_ms,omitempty"`
 }
 
 type DashboardStats struct {
@@ -148,6 +150,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	if err := s.ensureQueueItemColumn(ctx, "result_payload", `ALTER TABLE queue_items ADD COLUMN result_payload TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureQueueItemColumn(ctx, "requested_stages", `ALTER TABLE queue_items ADD COLUMN requested_stages TEXT NOT NULL DEFAULT '[]'`); err != nil {
 		return err
 	}
 
@@ -293,7 +298,7 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 func (s *Store) FindActiveQueueItemByDocumentID(ctx context.Context, documentID int64) (*QueueItem, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
-		       requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
+		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
 		WHERE document_id = ? AND status IN ('pending', 'processing')
@@ -313,11 +318,19 @@ func (s *Store) FindActiveQueueItemByDocumentID(ctx context.Context, documentID 
 }
 
 func (s *Store) CreateQueueItem(ctx context.Context, documentID *int64, documentTitle string, source string, trigger string, payload string) (*QueueItem, error) {
+	return s.CreateQueueItemWithRequestedStages(ctx, documentID, documentTitle, source, trigger, payload, nil)
+}
+
+func (s *Store) CreateQueueItemWithRequestedStages(ctx context.Context, documentID *int64, documentTitle string, source string, trigger string, payload string, requestedStages []string) (*QueueItem, error) {
 	requestedAtMS := nowMS()
+	requestedStagesJSON, err := marshalStringList(requestedStages)
+	if err != nil {
+		return nil, fmt.Errorf("marshal requested stages: %w", err)
+	}
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO queue_items(document_id, document_title, source, trigger_source, status, payload, requested_at_ms)
-		VALUES(?, ?, ?, ?, 'pending', ?, ?)
-	`, documentID, documentTitle, source, trigger, payload, requestedAtMS)
+		INSERT INTO queue_items(document_id, document_title, source, trigger_source, status, payload, requested_stages, requested_at_ms)
+		VALUES(?, ?, ?, ?, 'pending', ?, ?, ?)
+	`, documentID, documentTitle, source, trigger, payload, requestedStagesJSON, requestedAtMS)
 	if err != nil {
 		return nil, fmt.Errorf("create queue item: %w", err)
 	}
@@ -333,7 +346,7 @@ func (s *Store) CreateQueueItem(ctx context.Context, documentID *int64, document
 func (s *Store) GetQueueItem(ctx context.Context, id int64) (*QueueItem, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
-		       requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
+		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
 		WHERE id = ?
@@ -357,7 +370,7 @@ func (s *Store) ListQueueItems(ctx context.Context, status string, limit int) ([
 
 	query := `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
-		       requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
+		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
 	`
@@ -400,7 +413,7 @@ func (s *Store) ClaimNextPendingQueueItem(ctx context.Context) (*QueueItem, erro
 
 	row := transaction.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
-		       requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
+		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
 		WHERE status = 'pending'
@@ -453,7 +466,7 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 
 	row := transaction.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
-		       requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
+		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
 		WHERE id = ?
@@ -504,6 +517,47 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 	item.UsedVisionLLM = ""
 	item.ProcessingDurationMS = nil
 	return item, nil
+}
+
+func (s *Store) DeleteQueueItem(ctx context.Context, id int64) error {
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin queue transaction: %w", err)
+	}
+	defer transaction.Rollback()
+
+	var status string
+	if err := transaction.QueryRowContext(ctx, `SELECT status FROM queue_items WHERE id = ?`, id).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+		return errQueueItemNotFound
+	} else if err != nil {
+		return fmt.Errorf("select queue item for delete: %w", err)
+	}
+
+	if status == "processing" {
+		return errQueueItemNotRemovable
+	}
+
+	result, err := transaction.ExecContext(ctx, `
+		DELETE FROM queue_items
+		WHERE id = ? AND status <> 'processing'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("delete queue item: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read delete result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return errQueueItemNotRemovable
+	}
+
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit queue delete: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Store) MarkQueueItemCompleted(ctx context.Context, id int64, summary string, resultPayload string, usedLLM string, usedVisionLLM string, startedAtMS *int64) (*QueueItem, error) {
@@ -596,7 +650,7 @@ func (s *Store) BuildDashboardStats(ctx context.Context, limit int) (DashboardSt
 func (s *Store) listRecentRuns(ctx context.Context, limit int) ([]QueueItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
-		       requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
+		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
 		WHERE status IN ('completed', 'failed')
@@ -631,6 +685,7 @@ type scanner interface {
 func scanQueueItem(row scanner) (*QueueItem, error) {
 	var item QueueItem
 	var documentID sql.NullInt64
+	var requestedStagesJSON string
 	var startedAtMS sql.NullInt64
 	var completedAtMS sql.NullInt64
 	var durationMS sql.NullInt64
@@ -643,6 +698,7 @@ func scanQueueItem(row scanner) (*QueueItem, error) {
 		&item.Trigger,
 		&item.Status,
 		&item.Payload,
+		&requestedStagesJSON,
 		&item.RequestedAtMS,
 		&startedAtMS,
 		&completedAtMS,
@@ -658,6 +714,12 @@ func scanQueueItem(row scanner) (*QueueItem, error) {
 		return nil, err
 	}
 
+	requestedStages, err := unmarshalStringList(requestedStagesJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode queue item requested stages: %w", err)
+	}
+	item.RequestedStages = requestedStages
+
 	if documentID.Valid {
 		item.DocumentID = &documentID.Int64
 	}
@@ -672,4 +734,34 @@ func scanQueueItem(row scanner) (*QueueItem, error) {
 	}
 
 	return &item, nil
+}
+
+func marshalStringList(values []string) (string, error) {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func unmarshalStringList(value string) ([]string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	var decoded []string
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return nil, err
+	}
+
+	return decoded, nil
 }

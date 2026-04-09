@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"paperless-ai-ext/internal/paperless"
+
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
@@ -141,6 +143,7 @@ func (s *Server) Router() *gin.Engine {
 	authenticated.GET("/config", s.handleGetConfig)
 	authenticated.PUT("/config", s.handlePutConfig)
 	authenticated.GET("/queue", s.handleListQueue)
+	authenticated.DELETE("/queue/:id", s.handleDeleteQueueItem)
 	authenticated.POST("/queue/:id/process", s.handleProcessQueueItem)
 	authenticated.GET("/dashboard", s.handleDashboard)
 	authenticated.GET("/models", s.handleListModels)
@@ -285,6 +288,30 @@ func (s *Server) handleProcessQueueItem(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, item)
+}
+
+func (s *Server) handleDeleteQueueItem(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue item id must be numeric"})
+		return
+	}
+
+	err = s.store.DeleteQueueItem(c.Request.Context(), id)
+	if errors.Is(err, errQueueItemNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "queue item not found"})
+		return
+	}
+	if errors.Is(err, errQueueItemNotRemovable) {
+		c.JSON(http.StatusConflict, gin.H{"error": "queue item cannot be removed while it is processing"})
+		return
+	}
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func (s *Server) handleDashboard(c *gin.Context) {
@@ -466,7 +493,27 @@ func (s *Server) handlePaperlessWebhook(c *gin.Context) {
 		title = "Untitled document"
 	}
 
-	item, err := s.store.CreateQueueItem(c.Request.Context(), webhookRequest.DocumentID, title, "paperless", webhookRequest.Trigger, webhookRequest.StoredPayload)
+	requestedStages := []string(nil)
+	if cfg, err := s.store.LoadConfig(c.Request.Context()); err != nil {
+		s.writeInternalError(c, err)
+		return
+	} else {
+		requestedStages, err = resolveRequestedStagesForQueueItem(c.Request.Context(), cfg, webhookRequest.DocumentID)
+		if err != nil {
+			requestLogger.Warn().Err(err).Msg("failed to resolve requested stages for queued paperless webhook")
+			requestedStages = nil
+		}
+	}
+
+	item, err := s.store.CreateQueueItemWithRequestedStages(
+		c.Request.Context(),
+		webhookRequest.DocumentID,
+		title,
+		"paperless",
+		webhookRequest.Trigger,
+		webhookRequest.StoredPayload,
+		requestedStages,
+	)
 	if err != nil {
 		s.writeInternalError(c, err)
 		return
@@ -579,6 +626,29 @@ func (s *Server) logWebhookValidationFailure(logger zerolog.Logger, err error) {
 	}
 
 	event.Msg("paperless webhook rejected")
+}
+
+func resolveRequestedStagesForQueueItem(ctx context.Context, cfg BackendConfig, documentID *int64) ([]string, error) {
+	if documentID == nil {
+		return nil, nil
+	}
+	if cfg.Paperless.PaperlessURL == "" || cfg.Paperless.PaperlessToken == "" {
+		return nil, nil
+	}
+
+	client := paperless.NewClient(cfg.Paperless.PaperlessURL, cfg.Paperless.PaperlessToken)
+	tags, err := client.ListTags(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list paperless tags for queue plan: %w", err)
+	}
+	document, err := client.GetDocument(ctx, *documentID)
+	if err != nil {
+		return nil, fmt.Errorf("load paperless document for queue plan: %w", err)
+	}
+
+	tagNameSet, _ := buildTagNameSet(tags, document.TagIDs)
+	plan := buildProcessingPlan(cfg.Process, tagNameSet)
+	return append([]string(nil), plan.RequestedStageList...), nil
 }
 
 func (s *Server) writeInternalError(c *gin.Context, err error) {

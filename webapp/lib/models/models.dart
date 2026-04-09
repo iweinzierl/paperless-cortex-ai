@@ -451,6 +451,7 @@ class QueueItem {
   final String source;
   final String status;
   final String? payload;
+  final List<String> requestedStageKeys;
   final int requestedAtMs;
   final int? startedAtMs;
   final int? completedAtMs;
@@ -470,6 +471,7 @@ class QueueItem {
     required this.source,
     required this.status,
     this.payload,
+    required this.requestedStageKeys,
     required this.requestedAtMs,
     this.startedAtMs,
     this.completedAtMs,
@@ -491,6 +493,7 @@ class QueueItem {
       source: _asString(json['source']) ?? '',
       status: _asString(json['status']) ?? 'pending',
       payload: _asString(json['payload']),
+      requestedStageKeys: _asStringList(json['requested_stages']),
       requestedAtMs: _asInt(json['requested_at_ms']) ?? 0,
       startedAtMs: _asInt(json['started_at_ms']),
       completedAtMs: _asInt(json['completed_at_ms']),
@@ -508,6 +511,19 @@ class QueueItem {
   bool get isProcessing => status == 'processing';
 
   bool get canViewResultDetails => status == 'completed' || status == 'failed';
+
+  bool get canRemoveFromQueue => status != 'processing';
+
+  List<ProcessingStageProgress> get requestedStages {
+    if (requestedStageKeys.isNotEmpty) {
+      return requestedStageKeys
+          .map(_queueStageProgressFromKey)
+          .whereType<ProcessingStageProgress>()
+          .toList(growable: false);
+    }
+    return processingResult?.requestedStages ??
+        const <ProcessingStageProgress>[];
+  }
 
   DateTime get requestedAt =>
       DateTime.fromMillisecondsSinceEpoch(requestedAtMs);
@@ -725,4 +741,45 @@ double? _asDouble(dynamic val) {
   if (val is int) return val.toDouble();
   if (val is String) return double.tryParse(val);
   return null;
+}
+
+List<String> _asStringList(dynamic val) {
+  if (val is! List) {
+    return const <String>[];
+  }
+  return val
+      .map((entry) => _asString(entry)?.trim() ?? '')
+      .where((entry) => entry.isNotEmpty)
+      .toList(growable: false);
+}
+
+ProcessingStageProgress? _queueStageProgressFromKey(String key) {
+  switch (key) {
+    case 'extract_text':
+      return const ProcessingStageProgress(
+        key: 'extract_text',
+        label: 'OCR / Text',
+        status: 'pending',
+      );
+    case 'correspondent':
+      return const ProcessingStageProgress(
+        key: 'correspondent',
+        label: 'Correspondent',
+        status: 'pending',
+      );
+    case 'document_type':
+      return const ProcessingStageProgress(
+        key: 'document_type',
+        label: 'Document Type',
+        status: 'pending',
+      );
+    case 'tags':
+      return const ProcessingStageProgress(
+        key: 'tags',
+        label: 'Tags',
+        status: 'pending',
+      );
+    default:
+      return null;
+  }
 }

@@ -133,6 +133,56 @@ func TestPaperlessWebhookReusesActiveQueueItem(t *testing.T) {
 	}
 }
 
+func TestPaperlessWebhookPersistsRequestedStages(t *testing.T) {
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"document-type"},{"id":3,"name":"tags"}],"next":null}`))
+		case "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Invoice April","tags":[1,2,3]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	router, store := newWebhookTestRouter(t, "secret")
+	if err := store.SaveConfig(t.Context(), BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:      "process",
+			ProcessDocumentTypeTag: "document-type",
+			ProcessDocumentTagsTag: "tags",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: "http://localhost:11434"},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	response := performWebhookRequest(t, router, http.MethodPost, "/api/webhooks/paperless", strings.NewReader(`{"document_title":"Invoice April","document_url":"https://paperless.example/documents/42/details"}`), map[string]string{
+		"Content-Type":    "application/json",
+		"x-shared-secret": "secret",
+	})
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, response.Code, response.Body.String())
+	}
+
+	items, err := store.ListQueueItems(t.Context(), "", 10)
+	if err != nil {
+		t.Fatalf("list queue items: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 queue item, got %d", len(items))
+	}
+	if strings.Join(items[0].RequestedStages, ",") != "extract_text,document_type,tags" {
+		t.Fatalf("unexpected requested stages: %+v", items[0].RequestedStages)
+	}
+}
+
 func TestPaperlessWebhookRejectsUnsupportedContentType(t *testing.T) {
 	router, _ := newWebhookTestRouter(t, "secret")
 
@@ -241,6 +291,83 @@ func TestProcessQueueItemAllowsRetryForFailedItems(t *testing.T) {
 			failedItem.Attempts+1,
 			responseItem.Attempts,
 		)
+	}
+}
+
+func TestDeleteQueueItemRemovesPendingItems(t *testing.T) {
+	router, store := newWebhookTestRouter(t, "secret")
+
+	if err := store.CreateSession(t.Context(), Session{
+		Token:        "session-token",
+		Username:     "tester",
+		CreatedAtMS:  nowMS(),
+		ExpiresAtMS:  nowMS() + 60_000,
+		LastSeenAtMS: nowMS(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Delete me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	response := performWebhookRequest(
+		t,
+		router,
+		http.MethodDelete,
+		fmt.Sprintf("/api/queue/%d", item.ID),
+		nil,
+		map[string]string{"Authorization": "Bearer session-token"},
+	)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, response.Code, response.Body.String())
+	}
+
+	items, err := store.ListQueueItems(t.Context(), "", 10)
+	if err != nil {
+		t.Fatalf("list queue items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected queue to be empty after deletion, got %d items", len(items))
+	}
+}
+
+func TestDeleteQueueItemRejectsProcessingItems(t *testing.T) {
+	router, store := newWebhookTestRouter(t, "secret")
+
+	if err := store.CreateSession(t.Context(), Session{
+		Token:        "session-token",
+		Username:     "tester",
+		CreatedAtMS:  nowMS(),
+		ExpiresAtMS:  nowMS() + 60_000,
+		LastSeenAtMS: nowMS(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Delete me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+	if _, err := store.ClaimQueueItemByID(t.Context(), item.ID); err != nil {
+		t.Fatalf("claim queue item: %v", err)
+	}
+
+	response := performWebhookRequest(
+		t,
+		router,
+		http.MethodDelete,
+		fmt.Sprintf("/api/queue/%d", item.ID),
+		nil,
+		map[string]string{"Authorization": "Bearer session-token"},
+	)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusConflict, response.Code, response.Body.String())
 	}
 }
 

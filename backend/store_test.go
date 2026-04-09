@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,5 +105,103 @@ func TestClaimQueueItemByIDAllowsRetryForFailedItems(t *testing.T) {
 	}
 	if retriedItem.ProcessingDurationMS != nil {
 		t.Fatalf("expected processing duration to be cleared on retry claim, got %+v", retriedItem.ProcessingDurationMS)
+	}
+}
+
+func TestDeleteQueueItemRemovesNonProcessingItems(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Delete me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	if err := store.DeleteQueueItem(t.Context(), item.ID); err != nil {
+		t.Fatalf("delete queue item: %v", err)
+	}
+
+	_, err = store.GetQueueItem(t.Context(), item.ID)
+	if !errors.Is(err, errQueueItemNotFound) {
+		t.Fatalf("expected queue item to be deleted, got %v", err)
+	}
+	items, err := store.ListQueueItems(t.Context(), "", 10)
+	if err != nil {
+		t.Fatalf("list queue items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected queue to be empty after deletion, got %d items", len(items))
+	}
+}
+
+func TestCreateQueueItemWithRequestedStagesPersists(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItemWithRequestedStages(
+		t.Context(),
+		&documentID,
+		"Plan me",
+		"paperless",
+		"webhook",
+		`{}`,
+		[]string{"extract_text", "document_type", "tags"},
+	)
+	if err != nil {
+		t.Fatalf("create queue item with requested stages: %v", err)
+	}
+
+	if strings.Join(item.RequestedStages, ",") != "extract_text,document_type,tags" {
+		t.Fatalf("unexpected requested stages: %+v", item.RequestedStages)
+	}
+
+	reloaded, err := store.GetQueueItem(t.Context(), item.ID)
+	if err != nil {
+		t.Fatalf("get queue item: %v", err)
+	}
+	if strings.Join(reloaded.RequestedStages, ",") != "extract_text,document_type,tags" {
+		t.Fatalf("unexpected persisted requested stages: %+v", reloaded.RequestedStages)
+	}
+}
+
+func TestStoreDeleteQueueItemRejectsProcessingItems(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Delete me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+	if _, err := store.ClaimQueueItemByID(t.Context(), item.ID); err != nil {
+		t.Fatalf("claim queue item: %v", err)
+	}
+
+	err = store.DeleteQueueItem(t.Context(), item.ID)
+	if !errors.Is(err, errQueueItemNotRemovable) {
+		t.Fatalf("expected errQueueItemNotRemovable, got %v", err)
 	}
 }

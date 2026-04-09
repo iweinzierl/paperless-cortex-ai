@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const defaultChatTimeout = 2 * time.Minute
+const defaultChatTimeout = 10 * time.Minute
 
 type Message struct {
 	Role    string   `json:"role"`

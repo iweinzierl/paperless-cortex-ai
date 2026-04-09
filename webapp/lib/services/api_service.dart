@@ -152,6 +152,14 @@ class ApiService {
     return QueueItem.fromJson(jsonDecode(response.body));
   }
 
+  Future<void> deleteQueueItem(int id) async {
+    final response = await http.delete(
+      Uri.parse(baseUrl + '/queue/' + id.toString()),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+  }
+
   Future<OllamaModelsResponse> getModels() async {
     final response = await http.get(
       Uri.parse(baseUrl + '/models'),
