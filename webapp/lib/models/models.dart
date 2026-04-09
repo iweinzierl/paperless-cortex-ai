@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class Session {
   final String token;
   final String username;
@@ -173,6 +175,259 @@ class LLMConfig {
   }
 }
 
+class ProcessingStageProgress {
+  final String key;
+  final String label;
+  final String status;
+  final String? detail;
+  final String? usedModel;
+
+  const ProcessingStageProgress({
+    required this.key,
+    required this.label,
+    required this.status,
+    this.detail,
+    this.usedModel,
+  });
+
+  bool get isRequested => status != 'skipped';
+  bool get isPending => status == 'pending';
+  bool get isRunning => status == 'running';
+  bool get isCompleted => status == 'completed';
+  bool get isFailed => status == 'failed';
+}
+
+class ProcessingPlanModel {
+  final bool triggerTagPresent;
+  final bool forceOcr;
+  final bool forceVision;
+  final bool processCorrespondent;
+  final bool processDocumentType;
+  final bool processDocumentTags;
+  final List<String> requestedStages;
+
+  ProcessingPlanModel({
+    required this.triggerTagPresent,
+    required this.forceOcr,
+    required this.forceVision,
+    required this.processCorrespondent,
+    required this.processDocumentType,
+    required this.processDocumentTags,
+    required this.requestedStages,
+  });
+
+  factory ProcessingPlanModel.fromJson(Map<String, dynamic> json) {
+    final rawRequestedStages = json['requested_stages'];
+    List<String> requestedStages = [];
+    if (rawRequestedStages is List) {
+      requestedStages = rawRequestedStages
+          .map((entry) => _asString(entry) ?? '')
+          .where((entry) => entry.isNotEmpty)
+          .toList();
+    }
+
+    return ProcessingPlanModel(
+      triggerTagPresent: json['trigger_tag_present'] == true,
+      forceOcr: json['force_ocr'] == true,
+      forceVision: json['force_vision'] == true,
+      processCorrespondent: json['process_correspondent'] == true,
+      processDocumentType: json['process_document_type'] == true,
+      processDocumentTags: json['process_document_tags'] == true,
+      requestedStages: requestedStages,
+    );
+  }
+}
+
+class ExtractionStageModel {
+  final String status;
+  final String error;
+  final String source;
+  final String usedModel;
+  final int textLength;
+  final String textPreview;
+
+  ExtractionStageModel({
+    required this.status,
+    required this.error,
+    required this.source,
+    required this.usedModel,
+    required this.textLength,
+    required this.textPreview,
+  });
+
+  factory ExtractionStageModel.fromJson(Map<String, dynamic> json) {
+    return ExtractionStageModel(
+      status: _asString(json['status']) ?? 'skipped',
+      error: _asString(json['error']) ?? '',
+      source: _asString(json['source']) ?? '',
+      usedModel: _asString(json['used_model']) ?? '',
+      textLength: _asInt(json['text_length']) ?? 0,
+      textPreview: _asString(json['text_preview']) ?? '',
+    );
+  }
+
+  ProcessingStageProgress toStageProgress() {
+    String? detail;
+    if (error.isNotEmpty) {
+      detail = error;
+    } else if (source.isNotEmpty) {
+      detail = 'Source: $source';
+    } else if (textLength > 0) {
+      detail = '$textLength characters extracted';
+    }
+
+    return ProcessingStageProgress(
+      key: 'extract_text',
+      label: 'Text Extraction',
+      status: status,
+      detail: detail,
+      usedModel: usedModel.isEmpty ? null : usedModel,
+    );
+  }
+}
+
+class SuggestionStageModel {
+  final String status;
+  final String error;
+  final String usedModel;
+  final String confidence;
+  final String reasoning;
+  final Map<String, dynamic>? payload;
+
+  SuggestionStageModel({
+    required this.status,
+    required this.error,
+    required this.usedModel,
+    required this.confidence,
+    required this.reasoning,
+    this.payload,
+  });
+
+  factory SuggestionStageModel.fromJson(Map<String, dynamic> json) {
+    return SuggestionStageModel(
+      status: _asString(json['status']) ?? 'skipped',
+      error: _asString(json['error']) ?? '',
+      usedModel: _asString(json['used_model']) ?? '',
+      confidence: _asString(json['confidence']) ?? '',
+      reasoning: _asString(json['reasoning']) ?? '',
+      payload: _asMap(json['payload']),
+    );
+  }
+
+  ProcessingStageProgress toStageProgress(String key, String label) {
+    String? detail;
+    if (error.isNotEmpty) {
+      detail = error;
+    } else if (confidence.isNotEmpty) {
+      detail = 'Confidence: $confidence';
+    } else if (reasoning.isNotEmpty) {
+      detail = reasoning;
+    }
+
+    return ProcessingStageProgress(
+      key: key,
+      label: label,
+      status: status,
+      detail: detail,
+      usedModel: usedModel.isEmpty ? null : usedModel,
+    );
+  }
+}
+
+class ProcessingResultModel {
+  final ProcessingPlanModel? plan;
+  final ExtractionStageModel extraction;
+  final SuggestionStageModel correspondent;
+  final SuggestionStageModel documentType;
+  final SuggestionStageModel tags;
+  final List<String> notes;
+
+  ProcessingResultModel({
+    required this.plan,
+    required this.extraction,
+    required this.correspondent,
+    required this.documentType,
+    required this.tags,
+    required this.notes,
+  });
+
+  factory ProcessingResultModel.fromJson(Map<String, dynamic> json) {
+    final rawNotes = json['notes'];
+    List<String> notes = [];
+    if (rawNotes is List) {
+      notes = rawNotes
+          .map((entry) => _asString(entry) ?? '')
+          .where((entry) => entry.isNotEmpty)
+          .toList();
+    }
+
+    return ProcessingResultModel(
+      plan: _asMap(json['plan']) != null
+          ? ProcessingPlanModel.fromJson(_asMap(json['plan'])!)
+          : null,
+      extraction: ExtractionStageModel.fromJson(
+        _asMap(json['extraction']) ?? {},
+      ),
+      correspondent: SuggestionStageModel.fromJson(
+        _asMap(json['correspondent']) ?? {},
+      ),
+      documentType: SuggestionStageModel.fromJson(
+        _asMap(json['document_type']) ?? {},
+      ),
+      tags: SuggestionStageModel.fromJson(_asMap(json['tags']) ?? {}),
+      notes: notes,
+    );
+  }
+
+  List<ProcessingStageProgress> get stages => [
+    extraction.toStageProgress(),
+    correspondent.toStageProgress('correspondent', 'Correspondent'),
+    documentType.toStageProgress('document_type', 'Document Type'),
+    tags.toStageProgress('tags', 'Tags'),
+  ];
+
+  List<ProcessingStageProgress> get requestedStages =>
+      stages.where((stage) => stage.isRequested).toList(growable: false);
+
+  int get requestedStageCount => requestedStages.length;
+
+  int get completedStageCount =>
+      requestedStages.where((stage) => stage.isCompleted).length;
+
+  bool get hasFailure => requestedStages.any((stage) => stage.isFailed);
+
+  ProcessingStageProgress? get activeStage {
+    for (final stage in requestedStages) {
+      if (stage.isRunning) {
+        return stage;
+      }
+    }
+    for (final stage in requestedStages) {
+      if (stage.isPending) {
+        return stage;
+      }
+    }
+    for (final stage in requestedStages) {
+      if (stage.isFailed) {
+        return stage;
+      }
+    }
+    return null;
+  }
+
+  double get completionFraction {
+    final total = requestedStageCount;
+    if (total == 0) {
+      return 0;
+    }
+
+    final hasRunningStage = requestedStages.any((stage) => stage.isRunning);
+    final fraction =
+        (completedStageCount + (hasRunningStage ? 0.5 : 0.0)) / total;
+    return fraction.clamp(0.0, 1.0);
+  }
+}
+
 class QueueItem {
   final int id;
   final int? documentId;
@@ -186,6 +441,8 @@ class QueueItem {
   final int attempts;
   final String? lastError;
   final String? resultSummary;
+  final String? resultPayload;
+  final ProcessingResultModel? processingResult;
   final String? usedLlm;
   final String? usedVisionLlm;
   final int? processingDurationMs;
@@ -203,6 +460,8 @@ class QueueItem {
     required this.attempts,
     this.lastError,
     this.resultSummary,
+    this.resultPayload,
+    this.processingResult,
     this.usedLlm,
     this.usedVisionLlm,
     this.processingDurationMs,
@@ -222,10 +481,25 @@ class QueueItem {
       attempts: _asInt(json['attempts']) ?? 0,
       lastError: _asString(json['last_error']),
       resultSummary: _asString(json['result_summary']),
+      resultPayload: _asString(json['result_payload']),
+      processingResult: _parseProcessingResult(json['result_payload']),
       usedLlm: _asString(json['used_llm']),
       usedVisionLlm: _asString(json['used_vision_llm']),
       processingDurationMs: _asInt(json['processing_duration_ms']),
     );
+  }
+
+  bool get isProcessing => status == 'processing';
+
+  Duration? get elapsedDuration {
+    final start = startedAtMs;
+    if (start == null) {
+      return null;
+    }
+
+    final end = completedAtMs ?? DateTime.now().millisecondsSinceEpoch;
+    final milliseconds = end >= start ? end - start : 0;
+    return Duration(milliseconds: milliseconds);
   }
 }
 
@@ -326,10 +600,7 @@ class DocumentTag {
   final int id;
   final String name;
 
-  DocumentTag({
-    required this.id,
-    required this.name,
-  });
+  DocumentTag({required this.id, required this.name});
 
   factory DocumentTag.fromJson(Map<String, dynamic> json) {
     return DocumentTag(
@@ -352,6 +623,42 @@ class OllamaModelsResponse {
     }
     return OllamaModelsResponse(models: mods);
   }
+}
+
+ProcessingResultModel? _parseProcessingResult(dynamic value) {
+  try {
+    if (value == null) {
+      return null;
+    }
+    if (value is String) {
+      if (value.trim().isEmpty) {
+        return null;
+      }
+      final decoded = jsonDecode(value);
+      final map = _asMap(decoded);
+      if (map == null) {
+        return null;
+      }
+      return ProcessingResultModel.fromJson(map);
+    }
+    final map = _asMap(value);
+    if (map == null) {
+      return null;
+    }
+    return ProcessingResultModel.fromJson(map);
+  } catch (_) {
+    return null;
+  }
+}
+
+Map<String, dynamic>? _asMap(dynamic val) {
+  if (val is Map<String, dynamic>) {
+    return val;
+  }
+  if (val is Map) {
+    return val.map((key, value) => MapEntry(key.toString(), value));
+  }
+  return null;
 }
 
 String? _asString(dynamic val) {

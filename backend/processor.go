@@ -138,6 +138,9 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Bool("process_document_type", plan.DocumentType).
 		Bool("process_document_tags", plan.DocumentTags).
 		Msg("built processing plan")
+	if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+		return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist initial progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+	}
 
 	if !plan.TriggerTagPresent {
 		result.Notes = append(result.Notes, "trigger tag is no longer present on the live document")
@@ -187,6 +190,10 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Bool("force_vision", plan.ForceVision).
 		Bool("allow_vision_fallback", true).
 		Msg("starting extraction stage")
+	result.Extraction = ExtractionStageResult{Status: stageStatusRunning}
+	if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+		return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist extraction progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+	}
 	extraction, err := classification.ExtractDocumentText(ctx, downloaded.Path, classification.ExtractionOptions{
 		OllamaURL:           cfg.LLMs.OllamaURL,
 		OCRModel:            cfg.LLMs.DefaultLLM,
@@ -206,6 +213,9 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		TextLength:  len(extraction.Text),
 		TextPreview: extractedTextPreview(extraction.Text),
 	}
+	if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+		return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist extraction progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+	}
 	logger.Info().
 		Str("extraction_source", extraction.Source).
 		Str("extraction_model", extraction.UsedModel).
@@ -214,6 +224,10 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 
 	if plan.Correspondent {
 		logger.Info().Msg("starting correspondent suggestion stage")
+		result.Correspondent = SuggestionStageResult{Status: stageStatusRunning, UsedModel: cfg.LLMs.DefaultLLM}
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist correspondent progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
 		correspondents, err := client.ListCorrespondents(ctx)
 		if err != nil {
 			result.Correspondent = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
@@ -244,6 +258,9 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		}
 
 		result.Correspondent = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, correspondentStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist correspondent progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
 		logger.Info().
 			Str("confidence", suggestion.Confidence).
 			Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
@@ -254,6 +271,10 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 
 	if plan.DocumentType {
 		logger.Info().Msg("starting document type suggestion stage")
+		result.DocumentType = SuggestionStageResult{Status: stageStatusRunning, UsedModel: cfg.LLMs.DefaultLLM}
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist document type progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
 		documentTypes, err := client.ListDocumentTypes(ctx)
 		if err != nil {
 			result.DocumentType = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
@@ -268,6 +289,9 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		}
 
 		result.DocumentType = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, documentTypeStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist document type progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
 		logger.Info().
 			Str("confidence", suggestion.Confidence).
 			Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
@@ -278,6 +302,10 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 
 	if plan.DocumentTags {
 		logger.Info().Int("available_tag_count", len(tags)).Msg("starting tag suggestion stage")
+		result.Tags = SuggestionStageResult{Status: stageStatusRunning, UsedModel: cfg.LLMs.DefaultLLM}
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist tag progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
 		suggestion, err := classification.SuggestTags(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, tags)
 		if err != nil {
 			result.Tags = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
@@ -285,6 +313,9 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		}
 
 		result.Tags = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, tagsStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist tag progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
 		logger.Info().
 			Str("confidence", suggestion.Confidence).
 			Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
@@ -310,6 +341,16 @@ func (p *Processor) queueItemLogger(item *QueueItem) zerolog.Logger {
 		contextLogger = contextLogger.Str("queue_document_title", item.DocumentTitle)
 	}
 	return contextLogger.Logger()
+}
+
+func (p *Processor) persistQueueProgress(ctx context.Context, logger zerolog.Logger, item *QueueItem, result ProcessingResult, usedLLM string, usedVisionLLM string) (*QueueItem, error) {
+	summary := summarizeProcessingProgress(result)
+	updatedItem, err := p.store.UpdateQueueItemProgress(ctx, item.ID, summary, result.Marshal(), usedLLM, usedVisionLLM)
+	if err != nil {
+		return nil, err
+	}
+	logger.Debug().Str("progress_summary", summary).Msg("persisted queue item progress")
+	return updatedItem, nil
 }
 
 func (p *Processor) failQueueItem(ctx context.Context, logger zerolog.Logger, item *QueueItem, lastError string, cause error, resultPayload string, usedLLM string, usedVisionLLM string) (*QueueItem, error) {
@@ -378,4 +419,49 @@ func summarizeProcessingResult(result ProcessingResult) string {
 		return "Processed queue item without any completed suggestion stages."
 	}
 	return "Completed " + strings.Join(completed, ", ") + "."
+}
+
+func summarizeProcessingProgress(result ProcessingResult) string {
+	if stageLabel := currentRunningStageLabel(result); stageLabel != "" {
+		return "Running " + stageLabel + "."
+	}
+
+	pending := pendingStageLabels(result)
+	if len(pending) > 0 {
+		return "Pending " + strings.Join(pending, ", ") + "."
+	}
+
+	return summarizeProcessingResult(result)
+}
+
+func currentRunningStageLabel(result ProcessingResult) string {
+	switch {
+	case result.Extraction.Status == stageStatusRunning:
+		return "text extraction"
+	case result.Correspondent.Status == stageStatusRunning:
+		return "correspondent suggestion"
+	case result.DocumentType.Status == stageStatusRunning:
+		return "document type suggestion"
+	case result.Tags.Status == stageStatusRunning:
+		return "tag suggestion"
+	default:
+		return ""
+	}
+}
+
+func pendingStageLabels(result ProcessingResult) []string {
+	labels := make([]string, 0, 4)
+	if result.Extraction.Status == stageStatusPending {
+		labels = append(labels, "text extraction")
+	}
+	if result.Correspondent.Status == stageStatusPending {
+		labels = append(labels, "correspondent suggestion")
+	}
+	if result.DocumentType.Status == stageStatusPending {
+		labels = append(labels, "document type suggestion")
+	}
+	if result.Tags.Status == stageStatusPending {
+		labels = append(labels, "tag suggestion")
+	}
+	return labels
 }

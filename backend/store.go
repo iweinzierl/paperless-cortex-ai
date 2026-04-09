@@ -14,6 +14,7 @@ import (
 )
 
 const configKey = "backend_config"
+const sqliteBusyTimeoutMS = 5000
 
 var errQueueItemNotPending = errors.New("queue item is not pending")
 var errQueueItemNotFound = errors.New("queue item not found")
@@ -67,8 +68,14 @@ func OpenStore(databasePath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
 
 	store := &Store{db: database}
+	if err := store.configure(context.Background()); err != nil {
+		database.Close()
+		return nil, err
+	}
 	if err := store.migrate(context.Background()); err != nil {
 		database.Close()
 		return nil, err
@@ -79,6 +86,23 @@ func OpenStore(databasePath string) (*Store, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) configure(ctx context.Context) error {
+	statements := []string{
+		`PRAGMA journal_mode = WAL`,
+		fmt.Sprintf(`PRAGMA busy_timeout = %d`, sqliteBusyTimeoutMS),
+		`PRAGMA synchronous = NORMAL`,
+		`PRAGMA foreign_keys = ON`,
+	}
+
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("configure sqlite database: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -488,6 +512,18 @@ func (s *Store) MarkQueueItemCompleted(ctx context.Context, id int64, summary st
 		WHERE id = ?
 	`, completedAtMS, summary, resultPayload, usedLLM, usedVisionLLM, duration, id); err != nil {
 		return nil, fmt.Errorf("mark queue item completed: %w", err)
+	}
+
+	return s.GetQueueItem(ctx, id)
+}
+
+func (s *Store) UpdateQueueItemProgress(ctx context.Context, id int64, summary string, resultPayload string, usedLLM string, usedVisionLLM string) (*QueueItem, error) {
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE queue_items
+		SET result_summary = ?, result_payload = ?, used_llm = ?, used_vision_llm = ?, last_error = '', completed_at_ms = NULL, processing_duration_ms = NULL
+		WHERE id = ? AND status = 'processing'
+	`, summary, resultPayload, usedLLM, usedVisionLLM, id); err != nil {
+		return nil, fmt.Errorf("update queue item progress: %w", err)
 	}
 
 	return s.GetQueueItem(ctx, id)

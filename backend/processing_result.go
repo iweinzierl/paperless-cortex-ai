@@ -9,6 +9,8 @@ import (
 )
 
 const (
+	stageStatusPending   = "pending"
+	stageStatusRunning   = "running"
 	stageStatusSkipped   = "skipped"
 	stageStatusCompleted = "completed"
 	stageStatusFailed    = "failed"
@@ -66,13 +68,23 @@ type SuggestionStageResult struct {
 
 func newProcessingResult(document *paperless.Document, tagNames []string, plan ProcessingPlan) ProcessingResult {
 	result := ProcessingResult{
-		Plan: plan,
-		Extraction: ExtractionStageResult{
-			Status: stageStatusSkipped,
-		},
+		Plan:          plan,
+		Extraction:    ExtractionStageResult{Status: stageStatusSkipped},
 		Correspondent: SuggestionStageResult{Status: stageStatusSkipped},
 		DocumentType:  SuggestionStageResult{Status: stageStatusSkipped},
 		Tags:          SuggestionStageResult{Status: stageStatusSkipped},
+	}
+	if len(plan.RequestedStageList) > 0 {
+		result.Extraction.Status = stageStatusPending
+	}
+	if plan.Correspondent {
+		result.Correspondent.Status = stageStatusPending
+	}
+	if plan.DocumentType {
+		result.DocumentType.Status = stageStatusPending
+	}
+	if plan.DocumentTags {
+		result.Tags.Status = stageStatusPending
 	}
 	if document != nil {
 		result.Document = ProcessingDocumentSummary{
@@ -103,7 +115,7 @@ func buildProcessingPlan(cfg ProcessConfig, tagNameSet map[string]struct{}) Proc
 		DocumentType:      hasNamedTag(tagNameSet, cfg.ProcessDocumentTypeTag),
 		DocumentTags:      hasNamedTag(tagNameSet, cfg.ProcessDocumentTagsTag),
 	}
-	if plan.ForceOCR || plan.ForceVision {
+	if plan.HasRequestedWork() {
 		plan.RequestedStageList = append(plan.RequestedStageList, "extract_text")
 	}
 	if plan.Correspondent {

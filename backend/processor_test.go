@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -101,6 +102,121 @@ func TestProcessorProcessesDocumentTypeSuggestion(t *testing.T) {
 	}
 	if !strings.Contains(item.ResultPayload, `"document_type_id":7`) {
 		t.Fatalf("expected document type suggestion in result payload, got %s", item.ResultPayload)
+	}
+}
+
+func TestProcessorPersistsRunningStageProgress(t *testing.T) {
+	suggestionStarted := make(chan struct{}, 1)
+	releaseSuggestion := make(chan struct{})
+
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		select {
+		case suggestionStarted <- struct{}{}:
+		default:
+		}
+
+		<-releaseSuggestion
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"document_type_id\":7,\"document_type_name\":\"Invoice\",\"suggested_new_document_type\":null,\"confidence\":\"high\",\"reasoning\":\"Matches invoice wording\"}"}}`))
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"document-type"}],"next":null}`))
+		case r.URL.Path == "/api/document_types/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":7,"name":"Invoice"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"April Invoice","original_file_name":"invoice.txt","tags":[1,2]}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="invoice.txt"`)
+			_, _ = w.Write([]byte("Invoice text from processor test"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:      "process",
+			ProcessDocumentTypeTag: "document-type",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	documentID := int64(42)
+	createdItem, err := store.CreateQueueItem(t.Context(), &documentID, "April Invoice", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	processedItemCh := make(chan *QueueItem, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		item, processErr := processor.ProcessNext(t.Context())
+		if processErr != nil {
+			errCh <- processErr
+			return
+		}
+		processedItemCh <- item
+	}()
+
+	select {
+	case <-suggestionStarted:
+	case err := <-errCh:
+		t.Fatalf("process next queue item: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for suggestion stage to start")
+	}
+
+	progressItem, err := store.GetQueueItem(t.Context(), createdItem.ID)
+	if err != nil {
+		t.Fatalf("get queue item progress: %v", err)
+	}
+	if progressItem.Status != "processing" {
+		t.Fatalf("expected processing status during progress snapshot, got %q", progressItem.Status)
+	}
+	if progressItem.ResultSummary != "Running document type suggestion." {
+		t.Fatalf("expected running stage summary, got %q", progressItem.ResultSummary)
+	}
+
+	var progressResult ProcessingResult
+	if err := json.Unmarshal([]byte(progressItem.ResultPayload), &progressResult); err != nil {
+		t.Fatalf("decode progress result payload: %v", err)
+	}
+	if progressResult.Extraction.Status != stageStatusCompleted {
+		t.Fatalf("expected extraction completed in progress snapshot, got %+v", progressResult.Extraction)
+	}
+	if progressResult.DocumentType.Status != stageStatusRunning {
+		t.Fatalf("expected document type stage running, got %+v", progressResult.DocumentType)
+	}
+
+	close(releaseSuggestion)
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("process next queue item: %v", err)
+	case item := <-processedItemCh:
+		if item.Status != "completed" {
+			t.Fatalf("expected completed status, got %q", item.Status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for processor completion")
 	}
 }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webapp/theme.dart';
@@ -13,10 +15,15 @@ class QueueScreen extends StatefulWidget {
 }
 
 class _QueueScreenState extends State<QueueScreen> {
+  static const Duration _pollInterval = Duration(seconds: 3);
+
   bool _isLoading = true;
+  bool _isFetching = false;
   String? _error;
   List<QueueItem> _items = [];
+  List<QueueItem> _activeItems = [];
   String _filterStatus = 'all';
+  Timer? _pollTimer;
 
   @override
   void initState() {
@@ -24,29 +31,54 @@ class _QueueScreenState extends State<QueueScreen> {
     _loadData();
   }
 
-  Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadData({bool showLoadingState = true}) async {
+    if (_isFetching) {
+      return;
+    }
+
+    _isFetching = true;
+    if (showLoadingState) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    }
 
     try {
       final api = context.read<ApiService>();
       final statusQuery = _filterStatus == 'all' ? null : _filterStatus;
-      final items = await api.getQueue(status: statusQuery, limit: 100);
+      final responses = await Future.wait([
+        api.getQueue(status: statusQuery, limit: 100),
+        api.getQueue(status: 'processing', limit: 20),
+      ]);
+      final items = responses[0];
+      final activeItems = responses[1];
       if (mounted) {
         setState(() {
           _items = items;
+          _activeItems = activeItems;
           _isLoading = false;
+          _error = null;
         });
+        _syncPolling();
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Failed to load queue: \$e';
+          _error = 'Failed to load queue: $e';
           _isLoading = false;
         });
+        _pollTimer?.cancel();
+        _pollTimer = null;
       }
+    } finally {
+      _isFetching = false;
     }
   }
 
@@ -54,12 +86,36 @@ class _QueueScreenState extends State<QueueScreen> {
     try {
       final api = context.read<ApiService>();
       await api.processQueueItem(id);
-      _loadData(); // Refresh immediately after enqueing processing
+
+      if (!mounted) {
+        return;
+      }
+      await _loadData(showLoadingState: false);
     } catch (e) {
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Processing failed: \$e')));
+      ).showSnackBar(SnackBar(content: Text('Processing failed: $e')));
     }
+  }
+
+  void _syncPolling() {
+    final shouldPoll = _activeItems.isNotEmpty;
+    if (!shouldPoll) {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      return;
+    }
+
+    if (_pollTimer != null && _pollTimer!.isActive) {
+      return;
+    }
+
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
+      _loadData(showLoadingState: false);
+    });
   }
 
   @override
@@ -83,6 +139,7 @@ class _QueueScreenState extends State<QueueScreen> {
 
     int pendingCount = _items.where((i) => i.status == 'pending').length;
     int errorCount = _items.where((i) => i.status == 'failed').length;
+    int processingCount = _activeItems.length;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 32.0),
@@ -122,6 +179,13 @@ class _QueueScreenState extends State<QueueScreen> {
                     pendingCount.toString(),
                     TailwindColors.surfaceContainerLowest,
                     null,
+                  ),
+                  const SizedBox(width: 16),
+                  _buildTopStatCard(
+                    'Processing',
+                    processingCount.toString(),
+                    TailwindColors.primaryFixed,
+                    TailwindColors.primary,
                   ),
                   const SizedBox(width: 16),
                   _buildTopStatCard(
@@ -242,7 +306,7 @@ class _QueueScreenState extends State<QueueScreen> {
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
-                        onPressed: _loadData,
+                        onPressed: () => _loadData(),
                         icon: const Icon(Icons.refresh, size: 16),
                         label: const Text(
                           'Refresh',
@@ -370,6 +434,10 @@ class _QueueScreenState extends State<QueueScreen> {
               ],
             ),
           ),
+          if (_activeItems.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            _buildProgressPanel(),
+          ],
         ],
       ),
     );
@@ -424,6 +492,300 @@ class _QueueScreenState extends State<QueueScreen> {
       color: TailwindColors.onSurfaceVariant,
       letterSpacing: 1.0,
     );
+  }
+
+  Widget _buildProgressPanel() {
+    return Container(
+      decoration: BoxDecoration(
+        color: TailwindColors.inverseSurface,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 24,
+            offset: Offset(0, 12),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.terminal,
+                color: TailwindColors.primaryFixedDim,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'REAL-TIME PROCESS PROGRESS',
+                style: TextStyle(
+                  color: TailwindColors.primaryFixedDim,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: TailwindColors.tertiary.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${_activeItems.length} active',
+                  style: const TextStyle(
+                    color: TailwindColors.tertiaryFixed,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Processing snapshots refresh automatically while at least one item is running.',
+            style: TextStyle(
+              color: TailwindColors.inverseOnSurface,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 20),
+          ..._activeItems.map(_buildActiveProgressCard),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActiveProgressCard(QueueItem item) {
+    final processingResult = item.processingResult;
+    final requestedStages =
+        processingResult?.requestedStages ?? const <ProcessingStageProgress>[];
+    final activeStage = processingResult?.activeStage;
+    final progressValue =
+        processingResult?.requestedStageCount != null &&
+            (processingResult?.requestedStageCount ?? 0) > 0
+        ? processingResult!.completionFraction
+        : null;
+    final elapsedLabel = _formatDuration(item.elapsedDuration);
+    final statusLine = activeStage?.detail?.isNotEmpty == true
+        ? activeStage!.detail!
+        : (item.resultSummary?.isNotEmpty == true
+              ? item.resultSummary!
+              : 'Initializing processing pipeline.');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: TailwindColors.inverseOnSurface.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: TailwindColors.primaryFixed.withValues(alpha: 0.18),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.documentTitle,
+                      style: const TextStyle(
+                        color: TailwindColors.surfaceContainerLowest,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      activeStage != null
+                          ? 'Current stage: ${activeStage.label}'
+                          : 'Preparing workflow state',
+                      style: const TextStyle(
+                        color: TailwindColors.primaryFixed,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    elapsedLabel,
+                    style: const TextStyle(
+                      color: TailwindColors.surfaceContainerLowest,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Queue #${item.id}',
+                    style: const TextStyle(
+                      color: TailwindColors.primaryFixedDim,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              minHeight: 7,
+              value: progressValue,
+              backgroundColor: TailwindColors.surfaceContainerHighest
+                  .withValues(alpha: 0.45),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                TailwindColors.primaryFixedDim,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            statusLine,
+            style: const TextStyle(
+              color: TailwindColors.inverseOnSurface,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          if (requestedStages.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: requestedStages.map(_buildStageChip).toList(),
+            ),
+          ],
+          if ((item.usedLlm?.isNotEmpty == true) ||
+              (item.usedVisionLlm?.isNotEmpty == true)) ...[
+            const SizedBox(height: 12),
+            Text(
+              _buildModelSummary(item),
+              style: const TextStyle(
+                color: TailwindColors.primaryFixedDim,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStageChip(ProcessingStageProgress stage) {
+    final colors = _stageColors(stage.status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: colors.background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_stageIcon(stage.status), size: 14, color: colors.foreground),
+          const SizedBox(width: 6),
+          Text(
+            stage.label,
+            style: TextStyle(
+              color: colors.foreground,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  ({Color background, Color foreground}) _stageColors(String status) {
+    switch (status) {
+      case 'completed':
+        return (
+          background: TailwindColors.tertiary.withValues(alpha: 0.20),
+          foreground: TailwindColors.tertiaryFixed,
+        );
+      case 'running':
+        return (
+          background: TailwindColors.primary.withValues(alpha: 0.24),
+          foreground: TailwindColors.primaryFixed,
+        );
+      case 'failed':
+        return (
+          background: TailwindColors.error.withValues(alpha: 0.20),
+          foreground: TailwindColors.errorContainer,
+        );
+      default:
+        return (
+          background: TailwindColors.surfaceContainerHighest.withValues(
+            alpha: 0.38,
+          ),
+          foreground: TailwindColors.inverseOnSurface,
+        );
+    }
+  }
+
+  IconData _stageIcon(String status) {
+    switch (status) {
+      case 'completed':
+        return Icons.check_circle;
+      case 'running':
+        return Icons.autorenew;
+      case 'failed':
+        return Icons.error;
+      default:
+        return Icons.schedule;
+    }
+  }
+
+  String _formatDuration(Duration? duration) {
+    if (duration == null) {
+      return 'Waiting for timer';
+    }
+
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return '${hours}h ${minutes}m ${seconds}s';
+    }
+    if (minutes > 0) {
+      return '${minutes}m ${seconds}s';
+    }
+    return '${seconds}s';
+  }
+
+  String _buildModelSummary(QueueItem item) {
+    final labels = <String>[];
+    if (item.usedLlm?.isNotEmpty == true) {
+      labels.add('LLM ${item.usedLlm}');
+    }
+    if (item.usedVisionLlm?.isNotEmpty == true) {
+      labels.add('Vision ${item.usedVisionLlm}');
+    }
+    return labels.join('  •  ');
   }
 
   Widget _buildQueueRow(QueueItem item) {
