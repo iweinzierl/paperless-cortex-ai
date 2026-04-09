@@ -6,9 +6,24 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"paperless-ai-ext/internal/paperless"
 )
+
+var genericEntityNameTokens = map[string]struct{}{
+	"ag":   {},
+	"co":   {},
+	"gmbh": {},
+	"inc":  {},
+	"kg":   {},
+	"llc":  {},
+	"ltd":  {},
+	"mbh":  {},
+	"sa":   {},
+	"se":   {},
+	"the":  {},
+}
 
 type CorrespondentSuggestion struct {
 	CorrespondentID           *int64  `json:"correspondent_id"`
@@ -149,24 +164,44 @@ func ParseCorrespondentSuggestion(raw string, correspondents []paperless.Corresp
 		byName[strings.ToLower(strings.TrimSpace(item.Name))] = item
 	}
 
+	var matchedByID *paperless.Correspondent
 	if suggestion.CorrespondentID != nil {
 		item, ok := byID[*suggestion.CorrespondentID]
 		if !ok {
 			return CorrespondentSuggestion{}, fmt.Errorf("LLM selected unknown correspondent id %d", *suggestion.CorrespondentID)
 		}
-		suggestion.CorrespondentName = stringPointer(item.Name)
-		suggestion.SuggestedNewCorrespondent = nil
-		return suggestion, nil
+		matchedByID = &item
 	}
 
+	var matchedByName *paperless.Correspondent
 	if suggestion.CorrespondentName != nil {
 		item, ok := byName[strings.ToLower(strings.TrimSpace(*suggestion.CorrespondentName))]
 		if ok {
-			suggestion.CorrespondentID = int64Pointer(item.ID)
-			suggestion.CorrespondentName = stringPointer(item.Name)
-			suggestion.SuggestedNewCorrespondent = nil
-			return suggestion, nil
+			matchedByName = &item
 		}
+	}
+
+	if matchedByID != nil && matchedByName != nil && matchedByID.ID != matchedByName.ID {
+		suggestion.CorrespondentID = int64Pointer(matchedByName.ID)
+		suggestion.CorrespondentName = stringPointer(matchedByName.Name)
+		suggestion.SuggestedNewCorrespondent = nil
+		suggestion = reconcileCorrespondentReasoning(suggestion, correspondents)
+		return suggestion, nil
+	}
+
+	if matchedByID != nil {
+		suggestion.CorrespondentName = stringPointer(matchedByID.Name)
+		suggestion.SuggestedNewCorrespondent = nil
+		suggestion = reconcileCorrespondentReasoning(suggestion, correspondents)
+		return suggestion, nil
+	}
+
+	if matchedByName != nil {
+		suggestion.CorrespondentID = int64Pointer(matchedByName.ID)
+		suggestion.CorrespondentName = stringPointer(matchedByName.Name)
+		suggestion.SuggestedNewCorrespondent = nil
+		suggestion = reconcileCorrespondentReasoning(suggestion, correspondents)
+		return suggestion, nil
 	}
 
 	if suggestion.SuggestedNewCorrespondent != nil {
@@ -211,24 +246,41 @@ func ParseDocumentTypeSuggestion(raw string, documentTypes []paperless.DocumentT
 		byName[strings.ToLower(strings.TrimSpace(item.Name))] = item
 	}
 
+	var matchedByID *paperless.DocumentType
 	if suggestion.DocumentTypeID != nil {
 		item, ok := byID[*suggestion.DocumentTypeID]
 		if !ok {
 			return DocumentTypeSuggestion{}, fmt.Errorf("LLM selected unknown document type id %d", *suggestion.DocumentTypeID)
 		}
-		suggestion.DocumentTypeName = stringPointer(item.Name)
+		matchedByID = &item
+	}
+
+	var matchedByName *paperless.DocumentType
+	if suggestion.DocumentTypeName != nil {
+		item, ok := byName[strings.ToLower(strings.TrimSpace(*suggestion.DocumentTypeName))]
+		if ok {
+			matchedByName = &item
+		}
+	}
+
+	if matchedByID != nil && matchedByName != nil && matchedByID.ID != matchedByName.ID {
+		suggestion.DocumentTypeID = int64Pointer(matchedByName.ID)
+		suggestion.DocumentTypeName = stringPointer(matchedByName.Name)
 		suggestion.SuggestedNewDocumentType = nil
 		return suggestion, nil
 	}
 
-	if suggestion.DocumentTypeName != nil {
-		item, ok := byName[strings.ToLower(strings.TrimSpace(*suggestion.DocumentTypeName))]
-		if ok {
-			suggestion.DocumentTypeID = int64Pointer(item.ID)
-			suggestion.DocumentTypeName = stringPointer(item.Name)
-			suggestion.SuggestedNewDocumentType = nil
-			return suggestion, nil
-		}
+	if matchedByID != nil {
+		suggestion.DocumentTypeName = stringPointer(matchedByID.Name)
+		suggestion.SuggestedNewDocumentType = nil
+		return suggestion, nil
+	}
+
+	if matchedByName != nil {
+		suggestion.DocumentTypeID = int64Pointer(matchedByName.ID)
+		suggestion.DocumentTypeName = stringPointer(matchedByName.Name)
+		suggestion.SuggestedNewDocumentType = nil
+		return suggestion, nil
 	}
 
 	if suggestion.SuggestedNewDocumentType != nil {
@@ -321,4 +373,174 @@ func int64Pointer(value int64) *int64 {
 
 func stringPointer(value string) *string {
 	return &value
+}
+
+func reconcileCorrespondentReasoning(suggestion CorrespondentSuggestion, correspondents []paperless.Correspondent) CorrespondentSuggestion {
+	if suggestion.CorrespondentID == nil || suggestion.CorrespondentName == nil {
+		return suggestion
+	}
+
+	mentioned := findCorrespondentMentionInReasoning(suggestion.Reasoning, correspondents)
+	if mentioned == nil || mentioned.ID == *suggestion.CorrespondentID {
+		return suggestion
+	}
+
+	suggestion.CorrespondentID = int64Pointer(mentioned.ID)
+	suggestion.CorrespondentName = stringPointer(mentioned.Name)
+	suggestion.SuggestedNewCorrespondent = nil
+	suggestion.Confidence = lowerConfidence(suggestion.Confidence)
+	return suggestion
+}
+
+func findCorrespondentMentionInReasoning(reasoning string, correspondents []paperless.Correspondent) *paperless.Correspondent {
+	normalizedReasoning := normalizeSuggestionText(reasoning)
+	if normalizedReasoning == "" {
+		return nil
+	}
+
+	bestScore := 0
+	var best *paperless.Correspondent
+	ambiguous := false
+	for _, correspondent := range correspondents {
+		score := reasoningMentionScore(normalizedReasoning, correspondent.Name)
+		if score == 0 {
+			continue
+		}
+		if score > bestScore {
+			item := correspondent
+			best = &item
+			bestScore = score
+			ambiguous = false
+			continue
+		}
+		if score == bestScore {
+			ambiguous = true
+		}
+	}
+
+	if ambiguous || best == nil {
+		return nil
+	}
+
+	return best
+}
+
+func reasoningMentionScore(normalizedReasoning string, name string) int {
+	normalizedName := normalizeSuggestionText(name)
+	if normalizedName == "" {
+		return 0
+	}
+	if containsWholePhrase(normalizedReasoning, normalizedName) {
+		return 100 + len(normalizedName)
+	}
+
+	nameTokens := distinctiveSuggestionTokens(name)
+	if len(nameTokens) == 0 {
+		nameTokens = suggestionTokens(name)
+		if len(nameTokens) == 0 {
+			return 0
+		}
+	}
+	matches := 0
+	longestMatch := 0
+	for _, token := range nameTokens {
+		if containsWholePhrase(normalizedReasoning, token) {
+			matches++
+			if len(token) > longestMatch {
+				longestMatch = len(token)
+			}
+		}
+	}
+	if matches == 0 {
+		return 0
+	}
+	if matches == len(nameTokens) {
+		return 50 + matches
+	}
+	if len(nameTokens) == 1 {
+		return 20 + longestMatch
+	}
+	if longestMatch >= 6 {
+		return 25 + longestMatch + matches
+	}
+	return 0
+}
+
+func lowerConfidence(confidence string) string {
+	switch NormalizeConfidence(confidence) {
+	case "high":
+		return "medium"
+	case "medium":
+		return "low"
+	default:
+		return "low"
+	}
+}
+
+func normalizeSuggestionText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(text))
+	lastWasSpace := true
+	for _, char := range text {
+		switch {
+		case unicode.IsLetter(char):
+			builder.WriteRune(char)
+			lastWasSpace = false
+		case unicode.IsDigit(char):
+			builder.WriteRune(char)
+			lastWasSpace = false
+		default:
+			if !lastWasSpace {
+				builder.WriteByte(' ')
+				lastWasSpace = true
+			}
+		}
+	}
+
+	return strings.TrimSpace(builder.String())
+}
+
+func suggestionTokens(text string) []string {
+	normalized := normalizeSuggestionText(text)
+	if normalized == "" {
+		return nil
+	}
+	parts := strings.Fields(normalized)
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) < 3 {
+			continue
+		}
+		tokens = append(tokens, part)
+	}
+	return tokens
+}
+
+func distinctiveSuggestionTokens(text string) []string {
+	parts := suggestionTokens(text)
+	if len(parts) == 0 {
+		return nil
+	}
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if _, ok := genericEntityNameTokens[part]; ok {
+			continue
+		}
+		tokens = append(tokens, part)
+	}
+	return tokens
+}
+
+func containsWholePhrase(text string, phrase string) bool {
+	if text == "" || phrase == "" {
+		return false
+	}
+	haystack := " " + text + " "
+	needle := " " + phrase + " "
+	return strings.Contains(haystack, needle)
 }

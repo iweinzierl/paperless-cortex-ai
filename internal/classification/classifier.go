@@ -38,6 +38,8 @@ Return strict JSON with exactly these keys:
 Rules:
 - Prefer an existing correspondent whenever the document clearly belongs to one.
 - If you choose an existing correspondent, use its ID exactly as listed and set suggested_new_correspondent to null.
+- If you return both correspondent_id and correspondent_name, they must refer to the same listed correspondent.
+- If you choose an existing correspondent, your reasoning must explicitly name that same correspondent or an obvious normalized form of it.
 - If no existing correspondent fits, set correspondent_id and correspondent_name to null.
 - If you are uncertain, still return a valid JSON object and lower the confidence.
 
@@ -46,7 +48,9 @@ Rules:
 Valid example:
 {"correspondent_id":12,"correspondent_name":"Telekom","suggested_new_correspondent":null,"confidence":"high","reasoning":"The bill clearly comes from Telekom."}
 
-Existing correspondents:
+%s
+%s
+
 %s
 
 Document source: %s
@@ -70,6 +74,7 @@ Return strict JSON with exactly these keys:
 Rules:
 - Prefer an existing document type whenever the document clearly belongs to one.
 - If you choose an existing document type, use its ID exactly as listed and set suggested_new_document_type to null.
+- If you return both document_type_id and document_type_name, they must refer to the same listed document type.
 - If no existing document type fits, set document_type_id and document_type_name to null.
 - If you are uncertain, still return a valid JSON object and lower the confidence.
 
@@ -120,8 +125,8 @@ Document source: %s
 Document text:
 %s`
 
-func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, correspondents []paperless.Correspondent) (CorrespondentSuggestion, error) {
-	prompt := fmt.Sprintf(correspondentPromptTemplate, strictJSONOutputRules, buildEntityList(correspondents, "No existing correspondents available"), documentName, documentText)
+func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, correspondents []paperless.Correspondent, historicalDocuments []paperless.Document) (CorrespondentSuggestion, error) {
+	prompt := buildCorrespondentPrompt(documentName, documentText, correspondents, historicalDocuments)
 	response, err := ocr.Run(ctx, ollamaURL, model, ocr.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return CorrespondentSuggestion{}, err

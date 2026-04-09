@@ -158,6 +158,90 @@ func TestProcessorSkipsWhenTriggerTagMissing(t *testing.T) {
 	}
 }
 
+func TestProcessorUsesHistoricalDocumentsForCorrespondentSuggestion(t *testing.T) {
+	ollamaRequests := 0
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		ollamaRequests++
+		payload := string(body)
+		if !strings.Contains(payload, "Historical library evidence") {
+			t.Fatalf("expected historical evidence in ollama request, got %s", payload)
+		}
+		if !strings.Contains(payload, "Telekom Rechnung April") {
+			t.Fatalf("expected historical Telekom example in ollama request, got %s", payload)
+		}
+		if !strings.Contains(payload, "Aktuelle Telekom Rechnung") {
+			t.Fatalf("expected current document text in ollama request, got %s", payload)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"correspondent_id\":12,\"correspondent_name\":\"Telekom\",\"suggested_new_correspondent\":null,\"confidence\":\"high\",\"reasoning\":\"Historical Telekom examples and the current text both match.\"}"}}`))
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"correspondent"}],"next":null}`))
+		case r.URL.Path == "/api/correspondents/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":12,"name":"Telekom"},{"id":21,"name":"Vodafone"},{"id":22,"name":"Allianz"},{"id":23,"name":"Stadtwerke"}],"next":null}`))
+		case r.URL.Path == "/api/documents/" && r.URL.Query().Get("ordering") == "-created":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":99,"title":"Telekom Rechnung April","original_file_name":"telekom-april.txt","correspondent":12,"content":"Telekom Rechnung Kundennummer 123 Rechnungsnummer 456"},{"id":98,"title":"Vodafone Rechnung","original_file_name":"vodafone.txt","correspondent":21,"content":"Vodafone Tarif Vertragsnummer 555"},{"id":97,"title":"Allianz Beitrag","original_file_name":"allianz.txt","correspondent":22,"content":"Allianz Policennummer Jahresbeitrag"},{"id":96,"title":"Stadtwerke Abschlag","original_file_name":"stadtwerke.txt","correspondent":23,"content":"Stadtwerke Abschlag Zaehlerstand"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Mai Rechnung","original_file_name":"current.txt","tags":[1,2]}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="current.txt"`)
+			_, _ = w.Write([]byte("Aktuelle Telekom Rechnung mit Kundennummer 123 und Rechnungsnummer 456"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:       "process",
+			ProcessCorrespondentTag: "correspondent",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	documentID := int64(42)
+	if _, err := store.CreateQueueItem(t.Context(), &documentID, "Mai Rechnung", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	item, err := processor.ProcessNext(t.Context())
+	if err != nil {
+		t.Fatalf("process next queue item: %v", err)
+	}
+	if item.Status != "completed" {
+		t.Fatalf("expected completed status, got %q", item.Status)
+	}
+	if ollamaRequests != 1 {
+		t.Fatalf("expected 1 ollama request, got %d", ollamaRequests)
+	}
+	if !strings.Contains(item.ResultPayload, `"correspondent_id":12`) {
+		t.Fatalf("expected correspondent suggestion in result payload, got %s", item.ResultPayload)
+	}
+}
+
 func newProcessorTestHarness(t *testing.T) (*Processor, *Store) {
 	t.Helper()
 

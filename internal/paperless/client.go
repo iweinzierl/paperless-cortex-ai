@@ -23,6 +23,13 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type DocumentFilter struct {
+	CorrespondentID *int64
+	Limit           int
+	PageSize        int
+	Ordering        string
+}
+
 func NewClient(baseURL string, token string) *Client {
 	return &Client{
 		baseURL: strings.TrimSpace(baseURL),
@@ -50,6 +57,51 @@ func (client *Client) ListCorrespondents(ctx context.Context) ([]Correspondent, 
 
 func (client *Client) ListDocumentTypes(ctx context.Context) ([]DocumentType, error) {
 	return listEntities[DocumentType](ctx, client, "document_types")
+}
+
+func (client *Client) ListDocuments(ctx context.Context, filter DocumentFilter) ([]Document, error) {
+	endpoint, err := client.buildEndpointURL("documents/")
+	if err != nil {
+		return nil, err
+	}
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("parse paperless endpoint: %w", err)
+	}
+
+	query := parsed.Query()
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+	if filter.Limit > 0 && filter.Limit < pageSize {
+		pageSize = filter.Limit
+	}
+	query.Set("page_size", strconv.Itoa(pageSize))
+	if filter.CorrespondentID != nil {
+		query.Set("correspondent", strconv.FormatInt(*filter.CorrespondentID, 10))
+	}
+	if ordering := strings.TrimSpace(filter.Ordering); ordering != "" {
+		query.Set("ordering", ordering)
+	}
+	parsed.RawQuery = query.Encode()
+
+	documents := make([]Document, 0, minPositive(filter.Limit, 32))
+	nextURL := parsed.String()
+	for nextURL != "" {
+		pageItems, pageNext, err := getPage[Document](ctx, client, nextURL)
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, pageItems...)
+		if filter.Limit > 0 && len(documents) >= filter.Limit {
+			return documents[:filter.Limit], nil
+		}
+		nextURL = ResolveNextURL(parsed.String(), pageNext)
+	}
+
+	return documents, nil
 }
 
 func (client *Client) GetDocument(ctx context.Context, documentID int64) (*Document, error) {
@@ -326,4 +378,14 @@ func downloadFileName(resp *http.Response) string {
 	}
 
 	return ""
+}
+
+func minPositive(left int, right int) int {
+	if left <= 0 {
+		return right
+	}
+	if right <= 0 || left < right {
+		return left
+	}
+	return right
 }

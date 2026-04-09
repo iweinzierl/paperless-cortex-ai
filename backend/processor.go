@@ -221,7 +221,23 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		}
 		logger.Info().Int("available_correspondent_count", len(correspondents)).Msg("loaded correspondents for suggestion stage")
 
-		suggestion, err := classification.SuggestCorrespondent(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, correspondents)
+		historicalDocuments, err := client.ListDocuments(ctx, paperless.DocumentFilter{Limit: 200, Ordering: "-created"})
+		if err != nil {
+			logger.Warn().Err(err).Msg("failed to load historical documents for correspondent ranking; continuing without library evidence")
+			historicalDocuments = nil
+		} else if len(historicalDocuments) > 0 {
+			filteredDocuments := historicalDocuments[:0]
+			for _, historicalDocument := range historicalDocuments {
+				if historicalDocument.ID == document.ID {
+					continue
+				}
+				filteredDocuments = append(filteredDocuments, historicalDocument)
+			}
+			historicalDocuments = filteredDocuments
+			logger.Info().Int("historical_document_count", len(historicalDocuments)).Msg("loaded historical documents for correspondent ranking")
+		}
+
+		suggestion, err := classification.SuggestCorrespondent(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, correspondents, historicalDocuments)
 		if err != nil {
 			result.Correspondent = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
 			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("suggest correspondent: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)

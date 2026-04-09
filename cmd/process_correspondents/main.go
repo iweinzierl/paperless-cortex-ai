@@ -49,6 +49,12 @@ func main() {
 		exitWithError(err)
 	}
 
+	historicalDocuments, err := client.ListDocuments(ctx, paperless.DocumentFilter{Limit: 200, Ordering: "-created"})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: load historical paperless documents: %v\n", err)
+		historicalDocuments = nil
+	}
+
 	extracted, err := classification.ExtractDocumentText(ctx, documentPath, classification.ExtractionOptions{
 		OllamaURL:      ollamaURL,
 		OCRModel:       model,
@@ -58,7 +64,7 @@ func main() {
 		exitWithError(err)
 	}
 
-	suggestion, err := classification.SuggestCorrespondent(ctx, ollamaURL, model, filepath.Base(documentPath), extracted.Text, correspondents)
+	suggestion, err := classification.SuggestCorrespondent(ctx, ollamaURL, model, filepath.Base(documentPath), extracted.Text, correspondents, historicalDocuments)
 	if err != nil {
 		exitWithError(err)
 	}

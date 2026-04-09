@@ -53,6 +53,15 @@ type chatResponse struct {
 	Error   string  `json:"error"`
 }
 
+func defaultChatOptions() map[string]any {
+	return map[string]any{
+		"temperature": 0,
+		"top_k":       1,
+		"top_p":       0,
+		"seed":        1,
+	}
+}
+
 func BuildScreeningMessage(documentPath string, prompt string) (Message, error) {
 	info, err := os.Stat(documentPath)
 	if err != nil {
@@ -146,6 +155,7 @@ func Run(parent context.Context, ollamaURL string, model string, message Message
 		Model:    model,
 		Stream:   false,
 		Messages: []Message{message},
+		Options:  defaultChatOptions(),
 	}
 
 	payload, err := json.Marshal(requestBody)
