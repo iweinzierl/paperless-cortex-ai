@@ -7,7 +7,7 @@ This project is supposed to become an extension of paperless-ngx (https://github
 - **webapp* - a web application which interacts with the RESTful API provided by the backend. It's used by users to configure the extension.
 
 ## Backend
-Users must configure a set of tags. The backend observes document changes and the set tags. If the tag **process_trigger_tag** is set, the backend starts processing the document. The processing steps will be determined through further tags: **force_ocr_tag**, **force_vision_tag**, **process_correspondent_tag**, **process_document_type_tag**, **process_document_tags_tag**. If the processing of a document is completed, the **process_completed_tag** is set and the **process_trigger_tag** is unset.
+Users must configure a set of tags. The backend observes document changes and queues matching documents. When a queued item is processed, the backend fetches the live document metadata and downloads the current source file from paperless-ngx. If the tag **process_trigger_tag** is still present on the live document, the backend builds a staged processing plan from the configured tags. Text extraction is always the first stage and is followed by the requested suggestion stages: **force_ocr_tag**, **force_vision_tag**, **process_correspondent_tag**, **process_document_type_tag**, **process_document_tags_tag**. The backend currently stores structured suggestions and extraction metadata in its own queue records for review; it does not patch Paperless documents yet, so **process_completed_tag** is reserved for a later approval/apply flow.
 
 ### Container Build
 You can build and push a multi-architecture backend container image for deployment to k3s with:
@@ -66,12 +66,12 @@ The backend's engine must be configured by users. The configuration is structure
 
 #### Configuration: Process
 - **process_trigger_tag** - A document tag used to trigger the processing in the backend.
-- **force_ocr_tag** - A document tag used to enforce an OCR screening in the backend, ignoring the metadata that might be stored with the existing document already.
-- **force_vision_tag** - A document tag used to enforce text extraction using a Vision LLM (VLM).
-- **process_correspondent_tag** - A document tag to request a fix of the document's correspondent.
-- **process_document_type_tag** - A document tag to request a fix of the document's type.
-- **process_document_tags_tag** - A document tag to request a fix of the document's tags. 
-- **process_completed_tag** - A document tag that shall be set if the processing completed successfully.
+- **force_ocr_tag** - A document tag used to force the extraction stage to run from the downloaded source document.
+- **force_vision_tag** - A document tag used to force text extraction using a Vision LLM (VLM).
+- **process_correspondent_tag** - A document tag that enables the correspondent suggestion stage.
+- **process_document_type_tag** - A document tag that enables the document type suggestion stage.
+- **process_document_tags_tag** - A document tag that enables the document tag suggestion stage.
+- **process_completed_tag** - Reserved for a later writeback flow. The current implementation stores results in the backend but does not update Paperless tags.
 
 #### Configuration: Paperless
 - **paperless_url** - The URL to the paperless-ngx instance.
@@ -84,7 +84,8 @@ The backend's engine must be configured by users. The configuration is structure
 
 
 ### Features
-- **OCR Screening** - the ocr screening features uses configured LLMs to read the content of documents, for example PDF documents. After successful screening, the content is returned as text which can be further processed to determine correspondents, document type and others.
+- **Staged Processing Engine** - queued documents are processed one by one. The backend re-loads the live Paperless document, downloads the current source file, extracts text first, and then runs the requested suggestion stages for correspondents, document types, and tags.
+- **OCR Screening** - the OCR screening features use configured LLMs to read the content of documents, for example PDF documents. After successful screening, the content is returned as text which can be further processed to determine correspondents, document types, and tags.
 
 ## CMD
 The command line scripts are written in Golang as well and can be executed using the project's Makefile:
@@ -108,6 +109,8 @@ The webapp is a management interface for users to configure the backend. Users a
 - the backend uses token based authentication to access the paperless-ngx instance to fetch document metadata from paperless-ngx 
 - incoming http calls are authenticated using username:password from the paperless-ngx instance in a /api/auth call which returns a paperless-ngx session token upon successful authentication. This session token is most prominently used by the webapp to authenticate further API calls.
 - the backend implements a webhook which is called by paperless-ngx once a document is updated. Since the webhook in the workflow in paperless-ngx is called before the document is saved, the request is persisted in the queue and processed later. Authentication for this webhook endpoint is done through a shared secret set as http header (x-shared-secret) which is configured via environment variable in the backend (PAPERLESS_AIEXT_SHARED_SECRET).
+- the processor executes queued documents sequentially and evaluates the live document tags at execution time, not only the original webhook payload.
+- processing results are stored as structured JSON payloads on queue items so the UI can review extraction metadata and LLM suggestions before any future writeback flow is introduced.
 
 ### Backend Webhook Interface
 - endpoint: POST /api/webhooks/paperless

@@ -12,10 +12,28 @@ class ApiException implements Exception {
 }
 
 class ApiService {
-  static const String baseUrl = String.fromEnvironment(
+  static const String _configuredBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: '/api',
+    defaultValue: '',
   );
+
+  static String get baseUrl {
+    final configured = _configuredBaseUrl.trim();
+    if (configured.isNotEmpty) {
+      return configured;
+    }
+
+    final current = Uri.base;
+    final isLocalHost =
+        current.host == 'localhost' ||
+        current.host == '127.0.0.1' ||
+        current.host == '::1';
+    if (isLocalHost && current.port != 8080) {
+      return 'http://${current.host}:8080/api';
+    }
+
+    return '/api';
+  }
 
   SharedPreferences? _prefs;
 
