@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"paperless-ai-ext/internal/ocr"
+	"paperless-ai-ext/internal/ollama"
 )
 
 const textMarker = "Document text:\n"
@@ -63,7 +64,7 @@ func ExtractDocumentText(ctx context.Context, documentPath string, options Extra
 		return ExtractionResult{}, errors.New("ocr model is required for image extraction")
 	}
 
-	response, err := ocr.Run(ctx, options.OllamaURL, options.OCRModel, message)
+	response, err := ollama.Run(ctx, options.OllamaURL, options.OCRModel, message)
 	if err != nil {
 		if !options.AllowVisionFallback {
 			return ExtractionResult{}, err
@@ -82,7 +83,7 @@ func ExtractDocumentText(ctx context.Context, documentPath string, options Extra
 	return ExtractionResult{Text: text, Source: "ocr-llm", UsedModel: strings.TrimSpace(options.OCRModel)}, nil
 }
 
-func extractEmbeddedText(message ocr.Message) (string, error) {
+func extractEmbeddedText(message ollama.Message) (string, error) {
 	index := strings.Index(message.Content, textMarker)
 	if index < 0 {
 		return "", errors.New("screening message did not contain document text")
@@ -110,7 +111,7 @@ func extractWithVision(ctx context.Context, documentPath string, options Extract
 		return ExtractionResult{}, fmt.Errorf("%v; vision fallback failed: %w", rootCause, err)
 	}
 
-	response, err := ocr.Run(ctx, options.OllamaURL, visionModel, message)
+	response, err := ollama.Run(ctx, options.OllamaURL, visionModel, message)
 	if err != nil {
 		return ExtractionResult{}, fmt.Errorf("%v; vision fallback failed: %w", rootCause, err)
 	}

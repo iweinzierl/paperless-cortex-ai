@@ -36,6 +36,7 @@ Before applying it, update these files:
 - `deploy/k3s/deployment.yaml` - set the backend image to the registry and tag you pushed.
 - `deploy/k3s/webapp-deployment.yaml` - set the webapp image to the registry and tag you pushed.
 - `deploy/k3s/configmap.yaml` - set `PAPERLESS_URL` to your paperless-ngx instance URL.
+- `deploy/k3s/configmap.yaml` - adjust `PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS` if your Ollama deployment needs more than the default 2 minutes for larger models or prompts.
 - `deploy/k3s/secret.yaml` - replace `PAPERLESS_AIEXT_SHARED_SECRET` with a real shared secret.
 - `deploy/k3s/ingress.yaml` - set the hostname you want Traefik to expose for both the UI and API.
 
@@ -81,6 +82,9 @@ The backend's engine must be configured by users. The configuration is structure
 - **ollama_url** - The URL under which the ollama is accessible.
 - **default_llm** - The default LLM used for recommendation for correspondents, document types and tags.
 - **vision_llm** - The vision LLM (VLM) used for text extraction.
+
+Environment variables:
+- **PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS** - Optional timeout for a single Ollama chat request. Defaults to 120 seconds. Increase this for slower clusters or larger models.
 
 
 ### Features

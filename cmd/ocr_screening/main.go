@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"paperless-ai-ext/internal/ocr"
+	"paperless-ai-ext/internal/ollama"
 )
 
 func main() {
@@ -37,7 +38,7 @@ func main() {
 		exitWithError(err)
 	}
 
-	result, err := ocr.Run(context.Background(), ollamaURL, model, content)
+	result, err := ollama.Run(context.Background(), ollamaURL, model, content)
 	if err != nil {
 		exitWithError(err)
 	}

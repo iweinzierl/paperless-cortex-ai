@@ -28,6 +28,8 @@ spec:
           env:
             - name: PAPERLESS_AIEXT_DB_PATH
               value: /data/paperless-aiext.db
+            - name: PAPERLESS_AIEXT_PRETTY_LOGS
+              value: "true"
             - name: TMPDIR
               value: /tmp
           envFrom:

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"paperless-ai-ext/internal/ocr"
+	"paperless-ai-ext/internal/ollama"
 	"paperless-ai-ext/internal/paperless"
 )
 
@@ -127,7 +127,7 @@ Document text:
 
 func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, correspondents []paperless.Correspondent, historicalDocuments []paperless.Document) (CorrespondentSuggestion, error) {
 	prompt := buildCorrespondentPrompt(documentName, documentText, correspondents, historicalDocuments)
-	response, err := ocr.Run(ctx, ollamaURL, model, ocr.Message{Role: "user", Content: prompt})
+	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return CorrespondentSuggestion{}, err
 	}
@@ -136,7 +136,7 @@ func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, d
 
 func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, documentTypes []paperless.DocumentType) (DocumentTypeSuggestion, error) {
 	prompt := fmt.Sprintf(documentTypePromptTemplate, strictJSONOutputRules, buildEntityList(documentTypes, "No existing document types available"), documentName, documentText)
-	response, err := ocr.Run(ctx, ollamaURL, model, ocr.Message{Role: "user", Content: prompt})
+	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return DocumentTypeSuggestion{}, err
 	}
@@ -145,7 +145,7 @@ func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, do
 
 func SuggestTags(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, tags []paperless.Tag) (TagSuggestion, error) {
 	prompt := fmt.Sprintf(tagPromptTemplate, strictJSONOutputRules, buildEntityList(tags, "No existing tags available"), documentName, documentText)
-	response, err := ocr.Run(ctx, ollamaURL, model, ocr.Message{Role: "user", Content: prompt})
+	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return TagSuggestion{}, err
 	}

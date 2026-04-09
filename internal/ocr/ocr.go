@@ -2,20 +2,18 @@ package ocr
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
+
+	"paperless-ai-ext/internal/ollama"
 
 	pdf "github.com/ledongthuc/pdf"
 )
@@ -35,41 +33,14 @@ var imageExtensions = map[string]struct{}{
 	".webp": {},
 }
 
-type Message struct {
-	Role    string   `json:"role"`
-	Content string   `json:"content"`
-	Images  []string `json:"images,omitempty"`
-}
-
-type chatRequest struct {
-	Model    string         `json:"model"`
-	Stream   bool           `json:"stream"`
-	Messages []Message      `json:"messages"`
-	Options  map[string]any `json:"options,omitempty"`
-}
-
-type chatResponse struct {
-	Message Message `json:"message"`
-	Error   string  `json:"error"`
-}
-
-func defaultChatOptions() map[string]any {
-	return map[string]any{
-		"temperature": 0,
-		"top_k":       1,
-		"top_p":       0,
-		"seed":        1,
-	}
-}
-
-func BuildScreeningMessage(documentPath string, prompt string) (Message, error) {
+func BuildScreeningMessage(documentPath string, prompt string) (ollama.Message, error) {
 	info, err := os.Stat(documentPath)
 	if err != nil {
-		return Message{}, fmt.Errorf("read document metadata: %w", err)
+		return ollama.Message{}, fmt.Errorf("read document metadata: %w", err)
 	}
 
 	if info.IsDir() {
-		return Message{}, fmt.Errorf("document path %q is a directory", documentPath)
+		return ollama.Message{}, fmt.Errorf("document path %q is a directory", documentPath)
 	}
 
 	ext := strings.ToLower(filepath.Ext(documentPath))
@@ -77,20 +48,20 @@ func BuildScreeningMessage(documentPath string, prompt string) (Message, error) 
 	case ext == ".pdf":
 		text, err := extractPDFText(documentPath)
 		if err != nil {
-			return Message{}, err
+			return ollama.Message{}, err
 		}
 
-		return Message{
+		return ollama.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("%s\n\nDocument source: %s\n\nDocument text:\n%s", prompt, filepath.Base(documentPath), text),
 		}, nil
 	case isImageExtension(ext):
 		encoded, err := encodeImage(documentPath)
 		if err != nil {
-			return Message{}, err
+			return ollama.Message{}, err
 		}
 
-		return Message{
+		return ollama.Message{
 			Role:    "user",
 			Content: prompt,
 			Images:  []string{encoded},
@@ -98,24 +69,24 @@ func BuildScreeningMessage(documentPath string, prompt string) (Message, error) 
 	default:
 		text, err := os.ReadFile(documentPath)
 		if err != nil {
-			return Message{}, fmt.Errorf("read document: %w", err)
+			return ollama.Message{}, fmt.Errorf("read document: %w", err)
 		}
 
-		return Message{
+		return ollama.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("%s\n\nDocument source: %s\n\nDocument text:\n%s", prompt, filepath.Base(documentPath), string(text)),
 		}, nil
 	}
 }
 
-func BuildVisionScreeningMessage(documentPath string, prompt string, maxPages int) (Message, error) {
+func BuildVisionScreeningMessage(documentPath string, prompt string, maxPages int) (ollama.Message, error) {
 	info, err := os.Stat(documentPath)
 	if err != nil {
-		return Message{}, fmt.Errorf("read document metadata: %w", err)
+		return ollama.Message{}, fmt.Errorf("read document metadata: %w", err)
 	}
 
 	if info.IsDir() {
-		return Message{}, fmt.Errorf("document path %q is a directory", documentPath)
+		return ollama.Message{}, fmt.Errorf("document path %q is a directory", documentPath)
 	}
 
 	ext := strings.ToLower(filepath.Ext(documentPath))
@@ -123,10 +94,10 @@ func BuildVisionScreeningMessage(documentPath string, prompt string, maxPages in
 	case isImageExtension(ext):
 		encoded, err := encodeImage(documentPath)
 		if err != nil {
-			return Message{}, err
+			return ollama.Message{}, err
 		}
 
-		return Message{
+		return ollama.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("%s\n\nDocument source: %s", prompt, filepath.Base(documentPath)),
 			Images:  []string{encoded},
@@ -134,71 +105,17 @@ func BuildVisionScreeningMessage(documentPath string, prompt string, maxPages in
 	case ext == ".pdf":
 		images, err := renderPDFAsImages(documentPath, maxPages)
 		if err != nil {
-			return Message{}, err
+			return ollama.Message{}, err
 		}
 
-		return Message{
+		return ollama.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("%s\n\nDocument source: %s", prompt, filepath.Base(documentPath)),
 			Images:  images,
 		}, nil
 	default:
-		return Message{}, fmt.Errorf("vision OCR supports PDF and image files only, got %q", ext)
+		return ollama.Message{}, fmt.Errorf("vision OCR supports PDF and image files only, got %q", ext)
 	}
-}
-
-func Run(parent context.Context, ollamaURL string, model string, message Message) (string, error) {
-	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
-	defer cancel()
-
-	requestBody := chatRequest{
-		Model:    model,
-		Stream:   false,
-		Messages: []Message{message},
-		Options:  defaultChatOptions(),
-	}
-
-	payload, err := json.Marshal(requestBody)
-	if err != nil {
-		return "", fmt.Errorf("marshal ollama request: %w", err)
-	}
-
-	endpoint := strings.TrimRight(ollamaURL, "/") + "/api/chat"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return "", fmt.Errorf("build ollama request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("call ollama chat API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read ollama response: %w", err)
-	}
-
-	if resp.StatusCode >= http.StatusBadRequest {
-		return "", fmt.Errorf("ollama chat API returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
-	}
-
-	var parsed chatResponse
-	if err := json.Unmarshal(responseBody, &parsed); err != nil {
-		return "", fmt.Errorf("decode ollama response: %w", err)
-	}
-
-	if parsed.Error != "" {
-		return "", errors.New(parsed.Error)
-	}
-
-	if strings.TrimSpace(parsed.Message.Content) == "" {
-		return "", errors.New("ollama response did not include message content")
-	}
-
-	return parsed.Message.Content, nil
 }
 
 func ExtractText(documentPath string) (string, error) {
@@ -210,7 +127,7 @@ func ExtractText(documentPath string) (string, error) {
 	return extractTextFromMessage(message)
 }
 
-func extractTextFromMessage(message Message) (string, error) {
+func extractTextFromMessage(message ollama.Message) (string, error) {
 	const marker = "Document text:\n"
 	if len(message.Images) > 0 {
 		return "", errors.New("image-based OCR requires an Ollama model and cannot be extracted locally")

@@ -1,11 +1,13 @@
-package ocr
+package ollama
 
 import (
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+	"time"
 )
 
 func TestRunSendsDeterministicOptions(t *testing.T) {
@@ -50,5 +52,45 @@ func TestRunSendsDeterministicOptions(t *testing.T) {
 	}
 	if result != "ok" {
 		t.Fatalf("expected ok response, got %q", result)
+	}
+}
+
+func TestChatTimeoutUsesDefaultWhenUnsetOrInvalid(t *testing.T) {
+	t.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", "")
+	if got := chatTimeout(); got != defaultChatTimeout {
+		t.Fatalf("expected default timeout when unset, got %s", got)
+	}
+
+	t.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", "invalid")
+	if got := chatTimeout(); got != defaultChatTimeout {
+		t.Fatalf("expected default timeout when invalid, got %s", got)
+	}
+
+	t.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", "0")
+	if got := chatTimeout(); got != defaultChatTimeout {
+		t.Fatalf("expected default timeout when non-positive, got %s", got)
+	}
+}
+
+func TestChatTimeoutUsesConfiguredSeconds(t *testing.T) {
+	t.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", "600")
+	if got := chatTimeout(); got != 10*time.Minute {
+		t.Fatalf("expected configured timeout, got %s", got)
+	}
+}
+
+func TestChatTimeoutReadsEnvironmentAtCallTime(t *testing.T) {
+	original := os.Getenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS")
+	t.Cleanup(func() {
+		if original == "" {
+			_ = os.Unsetenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS")
+			return
+		}
+		_ = os.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", original)
+	})
+
+	_ = os.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", "180")
+	if got := chatTimeout(); got != 3*time.Minute {
+		t.Fatalf("expected 3 minute timeout, got %s", got)
 	}
 }
