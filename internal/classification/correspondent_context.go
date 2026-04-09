@@ -77,7 +77,7 @@ func buildCorrespondentPrompt(documentName string, documentText string, correspo
 	}
 
 	historicalEvidence := buildHistoricalEvidenceSection(promptContext.EvidenceCandidates)
-	rules := strictJSONOutputRules
+	rules := strictJSONOutputRules + "\n" + germanResponseRules
 	if promptContext.Shortlisted {
 		rules += "\n- The candidate list is a shortlist based on the current document and similar historical documents."
 		rules += "\n- If none of the shortlisted candidates fit, suggest a new correspondent instead of forcing a weak match."

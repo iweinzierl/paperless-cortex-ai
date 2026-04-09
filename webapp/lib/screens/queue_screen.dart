@@ -1113,16 +1113,21 @@ class _QueueScreenState extends State<QueueScreen> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 if (item.status == 'pending')
-                  IconButton(
-                    icon: const Icon(
-                      Icons.play_arrow,
-                      size: 20,
-                      color: TailwindColors.primary,
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.play_arrow,
+                        size: 24,
+                        color: TailwindColors.primary,
+                      ),
+                      tooltip: 'Process now',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: isRemoving
+                          ? null
+                          : () => _processItem(item.id),
                     ),
-                    tooltip: 'Process now',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: isRemoving ? null : () => _processItem(item.id),
                   )
                 else if (item.status == 'failed')
                   Padding(

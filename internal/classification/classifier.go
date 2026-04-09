@@ -22,6 +22,12 @@ const strictJSONOutputRules = `Output contract:
 - Keep the reasoning short and factual.
 - Before responding, verify that your full response is valid JSON.`
 
+const germanResponseRules = `Language rules:
+- Write all explanatory text in German.
+- Write the reasoning field in German.
+- If you suggest a new correspondent, document type, or tag, prefer a concise German label unless the document clearly uses an established non-German term.
+- Preserve any existing correspondent, document type, and tag names exactly as listed. Do not translate or rewrite existing names.`
+
 const correspondentPromptTemplate = `You are classifying a document for paperless-ngx.
 Choose the best matching existing correspondent if one clearly matches the document.
 If none match, suggest a concise new correspondent name.
@@ -46,7 +52,7 @@ Rules:
 %s
 
 Valid example:
-{"correspondent_id":12,"correspondent_name":"Telekom","suggested_new_correspondent":null,"confidence":"high","reasoning":"The bill clearly comes from Telekom."}
+{"correspondent_id":12,"correspondent_name":"Telekom","suggested_new_correspondent":null,"confidence":"high","reasoning":"Die Rechnung stammt eindeutig von Telekom."}
 
 %s
 %s
@@ -81,7 +87,7 @@ Rules:
 %s
 
 Valid example:
-{"document_type_id":7,"document_type_name":"Invoice","suggested_new_document_type":null,"confidence":"high","reasoning":"The document is a supplier invoice."}
+{"document_type_id":7,"document_type_name":"Invoice","suggested_new_document_type":null,"confidence":"high","reasoning":"Das Dokument ist eine Lieferantenrechnung."}
 
 Existing document types:
 %s
@@ -115,7 +121,7 @@ Rules:
 %s
 
 Valid example:
-{"tag_ids":[3,8],"tag_names":["invoice","telecom"],"suggested_new_tags":[],"confidence":"medium","reasoning":"The document is a telecom invoice and both tags fit."}
+{"tag_ids":[3,8],"tag_names":["invoice","telecom"],"suggested_new_tags":[],"confidence":"medium","reasoning":"Das Dokument ist eine Telekommunikationsrechnung und beide Tags passen."}
 
 Existing tags:
 %s
@@ -135,7 +141,7 @@ func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, d
 }
 
 func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, documentTypes []paperless.DocumentType) (DocumentTypeSuggestion, error) {
-	prompt := fmt.Sprintf(documentTypePromptTemplate, strictJSONOutputRules, buildEntityList(documentTypes, "No existing document types available"), documentName, documentText)
+	prompt := fmt.Sprintf(documentTypePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildEntityList(documentTypes, "No existing document types available"), documentName, documentText)
 	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return DocumentTypeSuggestion{}, err
@@ -144,7 +150,7 @@ func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, do
 }
 
 func SuggestTags(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, tags []paperless.Tag) (TagSuggestion, error) {
-	prompt := fmt.Sprintf(tagPromptTemplate, strictJSONOutputRules, buildEntityList(tags, "No existing tags available"), documentName, documentText)
+	prompt := fmt.Sprintf(tagPromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildEntityList(tags, "No existing tags available"), documentName, documentText)
 	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return TagSuggestion{}, err
