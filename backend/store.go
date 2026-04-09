@@ -16,7 +16,7 @@ import (
 const configKey = "backend_config"
 const sqliteBusyTimeoutMS = 5000
 
-var errQueueItemNotPending = errors.New("queue item is not pending")
+var errQueueItemNotRetryable = errors.New("queue item is not retryable")
 var errQueueItemNotFound = errors.New("queue item not found")
 var errNoPendingQueueItems = errors.New("no pending queue items")
 
@@ -466,15 +466,16 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 	if err != nil {
 		return nil, fmt.Errorf("select queue item: %w", err)
 	}
-	if item.Status != "pending" {
-		return nil, errQueueItemNotPending
+	if item.Status != "pending" && item.Status != "failed" {
+		return nil, errQueueItemNotRetryable
 	}
 
 	startedAtMS := nowMS()
 	result, err := transaction.ExecContext(ctx, `
 		UPDATE queue_items
-		SET status = 'processing', started_at_ms = ?, attempts = attempts + 1
-		WHERE id = ? AND status = 'pending'
+		SET status = 'processing', started_at_ms = ?, completed_at_ms = NULL, attempts = attempts + 1,
+		    last_error = '', result_summary = '', result_payload = '', used_llm = '', used_vision_llm = '', processing_duration_ms = NULL
+		WHERE id = ? AND status IN ('pending', 'failed')
 	`, startedAtMS, item.ID)
 	if err != nil {
 		return nil, fmt.Errorf("claim queue item: %w", err)
@@ -485,7 +486,7 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 		return nil, fmt.Errorf("read claim result: %w", err)
 	}
 	if rowsAffected == 0 {
-		return nil, errQueueItemNotPending
+		return nil, errQueueItemNotRetryable
 	}
 
 	if err := transaction.Commit(); err != nil {
@@ -495,6 +496,13 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 	item.Status = "processing"
 	item.Attempts++
 	item.StartedAtMS = &startedAtMS
+	item.CompletedAtMS = nil
+	item.LastError = ""
+	item.ResultSummary = ""
+	item.ResultPayload = ""
+	item.UsedLLM = ""
+	item.UsedVisionLLM = ""
+	item.ProcessingDurationMS = nil
 	return item, nil
 }
 

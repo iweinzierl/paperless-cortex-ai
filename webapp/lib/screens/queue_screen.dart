@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:webapp/theme.dart';
 import 'package:webapp/services/api_service.dart';
 import 'package:webapp/models/models.dart';
+import 'package:webapp/widgets/process_result_drawer.dart';
 import 'package:intl/intl.dart';
 
 class QueueScreen extends StatefulWidget {
@@ -24,6 +25,9 @@ class _QueueScreenState extends State<QueueScreen> {
   List<QueueItem> _activeItems = [];
   String _filterStatus = 'all';
   Timer? _pollTimer;
+  Timer? _drawerCleanupTimer;
+  QueueItem? _selectedResultItem;
+  bool _isResultDrawerOpen = false;
 
   @override
   void initState() {
@@ -34,6 +38,7 @@ class _QueueScreenState extends State<QueueScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _drawerCleanupTimer?.cancel();
     super.dispose();
   }
 
@@ -63,6 +68,10 @@ class _QueueScreenState extends State<QueueScreen> {
         setState(() {
           _items = items;
           _activeItems = activeItems;
+          _selectedResultItem = _refreshSelectedItem(
+            items,
+            _selectedResultItem,
+          );
           _isLoading = false;
           _error = null;
         });
@@ -85,19 +94,26 @@ class _QueueScreenState extends State<QueueScreen> {
   Future<void> _processItem(int id) async {
     try {
       final api = context.read<ApiService>();
-      await api.processQueueItem(id);
+      final triggeredItem = await api.processQueueItem(id);
 
       if (!mounted) {
         return;
       }
+
+      setState(() {
+        _items = _upsertQueueItem(_items, triggeredItem);
+        _activeItems = _upsertQueueItem(_activeItems, triggeredItem);
+      });
+      _syncPolling();
       await _loadData(showLoadingState: false);
     } catch (e) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Processing failed: $e')));
+      final errorMessage = e is ApiException ? e.message : e.toString();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Processing failed: $errorMessage')),
+      );
     }
   }
 
@@ -116,6 +132,69 @@ class _QueueScreenState extends State<QueueScreen> {
     _pollTimer = Timer.periodic(_pollInterval, (_) {
       _loadData(showLoadingState: false);
     });
+  }
+
+  void _openResultDrawer(QueueItem item) {
+    if (!item.canViewResultDetails) {
+      return;
+    }
+
+    _drawerCleanupTimer?.cancel();
+    setState(() {
+      _selectedResultItem = item;
+      _isResultDrawerOpen = true;
+    });
+  }
+
+  void _closeResultDrawer() {
+    if (_selectedResultItem == null && !_isResultDrawerOpen) {
+      return;
+    }
+
+    _drawerCleanupTimer?.cancel();
+    setState(() {
+      _isResultDrawerOpen = false;
+    });
+    _drawerCleanupTimer = Timer(processResultDrawerTransitionDuration, () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedResultItem = null;
+      });
+    });
+  }
+
+  QueueItem? _refreshSelectedItem(List<QueueItem> items, QueueItem? current) {
+    if (current == null) {
+      return null;
+    }
+
+    for (final item in items) {
+      if (item.id == current.id) {
+        return item;
+      }
+    }
+
+    return current;
+  }
+
+  List<QueueItem> _upsertQueueItem(List<QueueItem> items, QueueItem item) {
+    final updated = List<QueueItem>.from(items);
+    final existingIndex = updated.indexWhere((entry) => entry.id == item.id);
+    if (existingIndex >= 0) {
+      updated[existingIndex] = item;
+    } else {
+      updated.insert(0, item);
+    }
+
+    if (item.status != 'processing') {
+      updated.removeWhere(
+        (entry) => entry.id == item.id && entry.status != item.status,
+      );
+    }
+
+    return updated;
   }
 
   @override
@@ -141,305 +220,323 @@ class _QueueScreenState extends State<QueueScreen> {
     int errorCount = _items.where((i) => i.status == 'failed').length;
     int processingCount = _activeItems.length;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 32.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header & Stats
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 32.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Processing Queue',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: TailwindColors.onSurface,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '\${_items.length} items currently in log. Pending processes execute asynchronously.',
-                    style: const TextStyle(
-                      color: TailwindColors.onSurfaceVariant,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
+              // Header & Stats
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildTopStatCard(
-                    'Queued',
-                    pendingCount.toString(),
-                    TailwindColors.surfaceContainerLowest,
-                    null,
-                  ),
-                  const SizedBox(width: 16),
-                  _buildTopStatCard(
-                    'Processing',
-                    processingCount.toString(),
-                    TailwindColors.primaryFixed,
-                    TailwindColors.primary,
-                  ),
-                  const SizedBox(width: 16),
-                  _buildTopStatCard(
-                    'Error State',
-                    errorCount.toString(),
-                    TailwindColors.errorContainer,
-                    TailwindColors.error,
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 32),
-
-          // Main Table Area
-          Container(
-            decoration: BoxDecoration(
-              color: TailwindColors.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: TailwindColors.outlineVariant.withValues(alpha: 0.15),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Table Toolbar
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 16,
-                  ),
-                  decoration: const BoxDecoration(
-                    color: TailwindColors.surfaceContainerLowest,
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(12),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      // Filter Dropdown
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: TailwindColors.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: _filterStatus,
-                            isDense: true,
-                            icon: const Icon(
-                              Icons.filter_list,
-                              size: 16,
-                              color: TailwindColors.onSurfaceVariant,
-                            ),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: TailwindColors.onSurface,
-                            ),
-                            onChanged: (String? newValue) {
-                              if (newValue != null) {
-                                setState(() => _filterStatus = newValue);
-                                _loadData();
-                              }
-                            },
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'all',
-                                child: Text('All Events'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'pending',
-                                child: Text('Pending'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'processing',
-                                child: Text('Processing'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'completed',
-                                child: Text('Completed'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'failed',
-                                child: Text('Failed'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      // Search inside items
-                      Container(
-                        width: 240,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: TailwindColors.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const TextField(
-                          style: TextStyle(fontSize: 12),
-                          decoration: InputDecoration(
-                            hintText: 'Search documents...',
-                            prefixIcon: Icon(
-                              Icons.search,
-                              size: 16,
-                              color: TailwindColors.outline,
-                            ),
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: () => _loadData(),
-                        icon: const Icon(Icons.refresh, size: 16),
-                        label: const Text(
-                          'Refresh',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: TailwindColors.onSurfaceVariant,
-                          side: const BorderSide(
-                            color: TailwindColors.outlineVariant,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(color: TailwindColors.surfaceContainer, height: 1),
-
-                // Column Headers
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: Text('DOCUMENT', style: _tableHeaderStyle()),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Text('STATUS', style: _tableHeaderStyle()),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Text('ADDED', style: _tableHeaderStyle()),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Text('RETRIES', style: _tableHeaderStyle()),
-                      ),
-                      const SizedBox(width: 40), // actions spacer
-                    ],
-                  ),
-                ),
-
-                // Rows
-                if (_items.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(40),
-                    child: Center(
-                      child: Text(
-                        'Queue is empty matching these filters.',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: TailwindColors.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                ..._items.map((item) => _buildQueueRow(item)),
-
-                // Pagination Footer
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                  decoration: const BoxDecoration(
-                    color: TailwindColors.surfaceContainerLowest,
-                    borderRadius: BorderRadius.vertical(
-                      bottom: Radius.circular(12),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Showing most recent 100 queue entries',
+                        'Processing Queue',
                         style: TextStyle(
-                          fontSize: 12,
-                          color: TailwindColors.outline,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          color: TailwindColors.onSurface,
+                          letterSpacing: -0.5,
                         ),
                       ),
-                      Row(
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_items.length} items currently in log. Pending processes execute asynchronously.',
+                        style: const TextStyle(
+                          color: TailwindColors.onSurfaceVariant,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      _buildTopStatCard(
+                        'Queued',
+                        pendingCount.toString(),
+                        TailwindColors.surfaceContainerLowest,
+                        null,
+                      ),
+                      const SizedBox(width: 16),
+                      _buildTopStatCard(
+                        'Processing',
+                        processingCount.toString(),
+                        TailwindColors.primaryFixed,
+                        TailwindColors.primary,
+                      ),
+                      const SizedBox(width: 16),
+                      _buildTopStatCard(
+                        'Error State',
+                        errorCount.toString(),
+                        TailwindColors.errorContainer,
+                        TailwindColors.error,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 32),
+
+              // Main Table Area
+              Container(
+                decoration: BoxDecoration(
+                  color: TailwindColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: TailwindColors.outlineVariant.withValues(
+                      alpha: 0.15,
+                    ),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Table Toolbar
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      decoration: const BoxDecoration(
+                        color: TailwindColors.surfaceContainerLowest,
+                        borderRadius: BorderRadius.vertical(
+                          top: Radius.circular(12),
+                        ),
+                      ),
+                      child: Row(
                         children: [
-                          IconButton(
-                            onPressed: () {},
-                            icon: const Icon(Icons.chevron_left, size: 20),
-                            color: TailwindColors.onSurfaceVariant,
-                            constraints: const BoxConstraints(),
+                          // Filter Dropdown
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: TailwindColors.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _filterStatus,
+                                isDense: true,
+                                icon: const Icon(
+                                  Icons.filter_list,
+                                  size: 16,
+                                  color: TailwindColors.onSurfaceVariant,
+                                ),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: TailwindColors.onSurface,
+                                ),
+                                onChanged: (String? newValue) {
+                                  if (newValue != null) {
+                                    setState(() => _filterStatus = newValue);
+                                    _loadData();
+                                  }
+                                },
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: 'all',
+                                    child: Text('All Events'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'pending',
+                                    child: Text('Pending'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'processing',
+                                    child: Text('Processing'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'completed',
+                                    child: Text('Completed'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'failed',
+                                    child: Text('Failed'),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'Page 1 of 1',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: TailwindColors.onSurface,
+                          const Spacer(),
+                          // Search inside items
+                          Container(
+                            width: 240,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: TailwindColors.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const TextField(
+                              style: TextStyle(fontSize: 12),
+                              decoration: InputDecoration(
+                                hintText: 'Search documents...',
+                                prefixIcon: Icon(
+                                  Icons.search,
+                                  size: 16,
+                                  color: TailwindColors.outline,
+                                ),
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
-                          IconButton(
-                            onPressed: () {},
-                            icon: const Icon(Icons.chevron_right, size: 20),
-                            color: TailwindColors.onSurfaceVariant,
-                            constraints: const BoxConstraints(),
+                          OutlinedButton.icon(
+                            onPressed: () => _loadData(),
+                            icon: const Icon(Icons.refresh, size: 16),
+                            label: const Text(
+                              'Refresh',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: TailwindColors.onSurfaceVariant,
+                              side: const BorderSide(
+                                color: TailwindColors.outlineVariant,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                            ),
                           ),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                    Container(
+                      color: TailwindColors.surfaceContainer,
+                      height: 1,
+                    ),
+
+                    // Column Headers
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: Text('DOCUMENT', style: _tableHeaderStyle()),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text('STATUS', style: _tableHeaderStyle()),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text('ADDED', style: _tableHeaderStyle()),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text('RETRIES', style: _tableHeaderStyle()),
+                          ),
+                          const SizedBox(width: 88), // actions spacer
+                        ],
+                      ),
+                    ),
+
+                    // Rows
+                    if (_items.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(40),
+                        child: Center(
+                          child: Text(
+                            'Queue is empty matching these filters.',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: TailwindColors.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    ..._items.map((item) => _buildQueueRow(item)),
+
+                    // Pagination Footer
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                      decoration: const BoxDecoration(
+                        color: TailwindColors.surfaceContainerLowest,
+                        borderRadius: BorderRadius.vertical(
+                          bottom: Radius.circular(12),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Showing most recent 100 queue entries',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: TailwindColors.outline,
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              IconButton(
+                                onPressed: () {},
+                                icon: const Icon(Icons.chevron_left, size: 20),
+                                color: TailwindColors.onSurfaceVariant,
+                                constraints: const BoxConstraints(),
+                              ),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Page 1 of 1',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: TailwindColors.onSurface,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                onPressed: () {},
+                                icon: const Icon(Icons.chevron_right, size: 20),
+                                color: TailwindColors.onSurfaceVariant,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+              if (_activeItems.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                _buildProgressPanel(),
               ],
-            ),
+            ],
           ),
-          if (_activeItems.isNotEmpty) ...[
-            const SizedBox(height: 24),
-            _buildProgressPanel(),
-          ],
-        ],
-      ),
+        ),
+        Positioned.fill(
+          child: ProcessResultDrawer(
+            item: _selectedResultItem,
+            isOpen: _isResultDrawerOpen,
+            onClose: _closeResultDrawer,
+          ),
+        ),
+      ],
     );
   }
 
@@ -789,6 +886,7 @@ class _QueueScreenState extends State<QueueScreen> {
   }
 
   Widget _buildQueueRow(QueueItem item) {
+    final canOpenDetails = item.canViewResultDetails;
     Color statusColor;
     Color statusBgColor;
     switch (item.status) {
@@ -813,7 +911,7 @@ class _QueueScreenState extends State<QueueScreen> {
       'MMM d, yyyy HH:mm',
     ).format(DateTime.fromMillisecondsSinceEpoch(item.requestedAtMs));
 
-    return Container(
+    final row = Container(
       decoration: const BoxDecoration(
         border: Border(top: BorderSide(color: TailwindColors.surfaceContainer)),
       ),
@@ -835,7 +933,7 @@ class _QueueScreenState extends State<QueueScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Doc ID: \${item.documentId ?? "Unkn"}',
+                  'Doc ID: ${item.documentId ?? "Unkn"}',
                   style: const TextStyle(
                     fontSize: 11,
                     fontFamily: 'monospace',
@@ -883,7 +981,7 @@ class _QueueScreenState extends State<QueueScreen> {
           Expanded(
             flex: 2,
             child: Text(
-              '\${item.attempts}',
+              '${item.attempts}',
               style: const TextStyle(
                 fontSize: 12,
                 fontFamily: 'monospace',
@@ -892,8 +990,8 @@ class _QueueScreenState extends State<QueueScreen> {
             ),
           ),
           SizedBox(
-            width: 40,
-            child: item.status == 'pending' || item.status == 'failed'
+            width: 88,
+            child: item.status == 'pending'
                 ? IconButton(
                     icon: const Icon(
                       Icons.play_arrow,
@@ -905,9 +1003,58 @@ class _QueueScreenState extends State<QueueScreen> {
                     constraints: const BoxConstraints(),
                     onPressed: () => _processItem(item.id),
                   )
+                : item.status == 'failed'
+                ? Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _processItem(item.id),
+                      icon: const Icon(
+                        Icons.refresh,
+                        size: 16,
+                        color: TailwindColors.primary,
+                      ),
+                      label: const Text(
+                        'Retry',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: TailwindColors.primary,
+                        side: BorderSide(
+                          color: TailwindColors.primary.withValues(alpha: 0.22),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  )
                 : null,
           ),
         ],
+      ),
+    );
+
+    if (!canOpenDetails) {
+      return row;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _openResultDrawer(item),
+          hoverColor: TailwindColors.primary.withValues(alpha: 0.04),
+          child: row,
+        ),
       ),
     );
   }

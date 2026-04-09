@@ -426,6 +426,22 @@ class ProcessingResultModel {
         (completedStageCount + (hasRunningStage ? 0.5 : 0.0)) / total;
     return fraction.clamp(0.0, 1.0);
   }
+
+  String? get failureSummary {
+    for (final stage in requestedStages) {
+      if (stage.isFailed && stage.detail != null && stage.detail!.isNotEmpty) {
+        return stage.detail;
+      }
+    }
+    return null;
+  }
+
+  String? get extractionPreview {
+    if (extraction.textPreview.isEmpty) {
+      return null;
+    }
+    return extraction.textPreview;
+  }
 }
 
 class QueueItem {
@@ -490,6 +506,35 @@ class QueueItem {
   }
 
   bool get isProcessing => status == 'processing';
+
+  bool get canViewResultDetails => status == 'completed' || status == 'failed';
+
+  DateTime get requestedAt =>
+      DateTime.fromMillisecondsSinceEpoch(requestedAtMs);
+
+  DateTime? get completedAt => completedAtMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(completedAtMs!);
+
+  String get detailSummary {
+    final error = lastError?.trim();
+    if (error != null && error.isNotEmpty) {
+      return error;
+    }
+    final summary = resultSummary?.trim();
+    if (summary != null && summary.isNotEmpty) {
+      return summary;
+    }
+    final failure = processingResult?.failureSummary?.trim();
+    if (failure != null && failure.isNotEmpty) {
+      return failure;
+    }
+    final notes = processingResult?.notes;
+    if (notes != null && notes.isNotEmpty) {
+      return notes.first;
+    }
+    return 'No detailed process result available.';
+  }
 
   Duration? get elapsedDuration {
     final start = startedAtMs;

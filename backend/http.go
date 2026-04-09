@@ -270,13 +270,13 @@ func (s *Server) handleProcessQueueItem(c *gin.Context) {
 		return
 	}
 
-	item, err := s.processor.ProcessByID(c.Request.Context(), id)
+	item, err := s.processor.StartProcessByID(c.Request.Context(), id)
 	if errors.Is(err, errQueueItemNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "queue item not found"})
 		return
 	}
-	if errors.Is(err, errQueueItemNotPending) {
-		c.JSON(http.StatusConflict, gin.H{"error": "queue item is not pending"})
+	if errors.Is(err, errQueueItemNotRetryable) {
+		c.JSON(http.StatusConflict, gin.H{"error": "queue item cannot be retriggered unless it is pending or failed"})
 		return
 	}
 	if err != nil {

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webapp/theme.dart';
 import 'package:webapp/services/api_service.dart';
 import 'package:webapp/models/models.dart';
+import 'package:webapp/widgets/process_result_drawer.dart';
 import 'package:intl/intl.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -16,11 +19,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isLoading = true;
   String? _error;
   DashboardStats? _stats;
+  Timer? _drawerCleanupTimer;
+  QueueItem? _selectedResultItem;
+  bool _isResultDrawerOpen = false;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _drawerCleanupTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -35,6 +47,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) {
         setState(() {
           _stats = stats;
+          _selectedResultItem = _refreshSelectedItem(
+            stats.recentRuns,
+            _selectedResultItem,
+          );
           _isLoading = false;
         });
       }
@@ -46,6 +62,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
         });
       }
     }
+  }
+
+  void _openResultDrawer(QueueItem item) {
+    if (!item.canViewResultDetails) {
+      return;
+    }
+
+    _drawerCleanupTimer?.cancel();
+    setState(() {
+      _selectedResultItem = item;
+      _isResultDrawerOpen = true;
+    });
+  }
+
+  void _closeResultDrawer() {
+    if (_selectedResultItem == null && !_isResultDrawerOpen) {
+      return;
+    }
+
+    _drawerCleanupTimer?.cancel();
+    setState(() {
+      _isResultDrawerOpen = false;
+    });
+    _drawerCleanupTimer = Timer(processResultDrawerTransitionDuration, () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedResultItem = null;
+      });
+    });
+  }
+
+  QueueItem? _refreshSelectedItem(List<QueueItem> items, QueueItem? current) {
+    if (current == null) {
+      return null;
+    }
+
+    for (final item in items) {
+      if (item.id == current.id) {
+        return item;
+      }
+    }
+
+    return current;
   }
 
   @override
@@ -69,190 +130,206 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     final stats = _stats!;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(32.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Stats Section
-          Row(
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          padding: const EdgeInsets.all(32.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: _buildStatCard(
-                  'Documents in Queue',
-                  Icons.layers,
-                  stats.queuedCount.toString(),
-                  'Active',
-                  true,
-                ),
-              ),
-              const SizedBox(width: 24),
-              Expanded(
-                child: _buildStatCard(
-                  'Avg. Processing Time',
-                  Icons.timer,
-                  ((stats.averageProcessingMs / 1000).toStringAsFixed(1)) + 's',
-                  'Stable',
-                  true,
-                ),
-              ),
-              const SizedBox(width: 24),
-              Expanded(
-                child: _buildStatCard(
-                  'Success Rate',
-                  Icons.verified,
-                  ((stats.processingSuccessRate * 100).toStringAsFixed(1)) +
-                      '%',
-                  'Current',
-                  true,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 40),
-
-          // Table Section
-          Container(
-            decoration: BoxDecoration(
-              color: TailwindColors.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.02),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                // Table Header area
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 16,
-                  ),
-                  decoration: const BoxDecoration(
-                    color: TailwindColors.surfaceContainerLowest,
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildStatCard(
+                      'Documents in Queue',
+                      Icons.layers,
+                      stats.queuedCount.toString(),
+                      'Active',
+                      true,
                     ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Processing History',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                          color: TailwindColors.onSurface,
+                  const SizedBox(width: 24),
+                  Expanded(
+                    child: _buildStatCard(
+                      'Avg. Processing Time',
+                      Icons.timer,
+                      '${(stats.averageProcessingMs / 1000).toStringAsFixed(1)}s',
+                      'Stable',
+                      true,
+                    ),
+                  ),
+                  const SizedBox(width: 24),
+                  Expanded(
+                    child: _buildStatCard(
+                      'Success Rate',
+                      Icons.verified,
+                      '${(stats.processingSuccessRate * 100).toStringAsFixed(1)}%',
+                      'Current',
+                      true,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 40),
+              Container(
+                decoration: BoxDecoration(
+                  color: TailwindColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.02),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      decoration: const BoxDecoration(
+                        color: TailwindColors.surfaceContainerLowest,
+                        borderRadius: BorderRadius.vertical(
+                          top: Radius.circular(12),
                         ),
                       ),
-                      Row(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          OutlinedButton(
-                            onPressed: () {},
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: TailwindColors.onSurfaceVariant,
-                              side: const BorderSide(
-                                color: TailwindColors.outlineVariant,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text(
-                              'Export CSV',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
+                          const Text(
+                            'Processing History',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: TailwindColors.onSurface,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          ElevatedButton(
-                            onPressed: _loadData,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: TailwindColors.primary,
-                              foregroundColor: TailwindColors.onPrimary,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                          Row(
+                            children: [
+                              OutlinedButton(
+                                onPressed: () {},
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor:
+                                      TailwindColors.onSurfaceVariant,
+                                  side: const BorderSide(
+                                    color: TailwindColors.outlineVariant,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Export CSV',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                               ),
+                              const SizedBox(width: 8),
+                              ElevatedButton(
+                                onPressed: _loadData,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: TailwindColors.primary,
+                                  foregroundColor: TailwindColors.onPrimary,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Refresh',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      color: TailwindColors.surfaceContainer,
+                      height: 1,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              'DOCUMENT NAME',
+                              style: _tableHeaderStyle(),
                             ),
-                            child: const Text(
-                              'Refresh',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text('STATUS', style: _tableHeaderStyle()),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              'MODEL USED',
+                              style: _tableHeaderStyle(),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              'TIMESTAMP',
+                              style: _tableHeaderStyle(),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 1,
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                'PROC. TIME',
+                                style: _tableHeaderStyle(),
                               ),
                             ),
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                ),
-                // Table rows wrapper
-                Container(
-                  color: TailwindColors.surfaceContainer,
-                  height: 1,
-                ), // Divider
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: Text(
-                          'DOCUMENT NAME',
-                          style: _tableHeaderStyle(),
-                        ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Text('STATUS', style: _tableHeaderStyle()),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Text('MODEL USED', style: _tableHeaderStyle()),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Text('TIMESTAMP', style: _tableHeaderStyle()),
-                      ),
-                      Expanded(
-                        flex: 1,
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: Text('PROC. TIME', style: _tableHeaderStyle()),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Sample Data mapped from API
-                if (stats.recentRuns.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(32.0),
-                    child: Text(
-                      'No recent processing runs.',
-                      style: TextStyle(color: TailwindColors.onSurfaceVariant),
                     ),
-                  ),
-                ...stats.recentRuns.asMap().entries.map((entry) {
-                  final idx = entry.key;
-                  final item = entry.value;
-                  return _buildTableRow(item, idx % 2 != 0);
-                }),
-              ],
-            ),
+                    if (stats.recentRuns.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(32.0),
+                        child: Text(
+                          'No recent processing runs.',
+                          style: TextStyle(
+                            color: TailwindColors.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ...stats.recentRuns.asMap().entries.map((entry) {
+                      final idx = entry.key;
+                      final item = entry.value;
+                      return _buildTableRow(item, idx % 2 != 0);
+                    }),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+        Positioned.fill(
+          child: ProcessResultDrawer(
+            item: _selectedResultItem,
+            isOpen: _isResultDrawerOpen,
+            onClose: _closeResultDrawer,
+          ),
+        ),
+      ],
     );
   }
 
@@ -350,6 +427,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildTableRow(QueueItem item, bool alternate) {
+    final canOpenDetails = item.canViewResultDetails;
     Color statusColor;
     switch (item.status) {
       case 'completed':
@@ -372,10 +450,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'HH:mm:ss',
     ).format(DateTime.fromMillisecondsSinceEpoch(item.requestedAtMs));
     final procTimeStr = item.processingDurationMs != null
-        ? '\${(item.processingDurationMs! / 1000).toStringAsFixed(2)}s'
+        ? '${(item.processingDurationMs! / 1000).toStringAsFixed(2)}s'
         : '--';
 
-    return Container(
+    final row = Container(
       color: alternate ? TailwindColors.surface : Colors.transparent,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       child: Row(
@@ -412,7 +490,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       Text(
-                        'Source: \${item.source}',
+                        'Source: ${item.source}',
                         style: const TextStyle(
                           fontSize: 10,
                           color: TailwindColors.onSurfaceVariant,
@@ -508,6 +586,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
         ],
+      ),
+    );
+
+    if (!canOpenDetails) {
+      return row;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _openResultDrawer(item),
+          hoverColor: TailwindColors.primary.withValues(alpha: 0.04),
+          child: row,
+        ),
       ),
     );
   }

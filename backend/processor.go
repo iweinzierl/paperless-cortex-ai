@@ -72,6 +72,23 @@ func (p *Processor) ProcessByID(ctx context.Context, id int64) (*QueueItem, erro
 	return p.execute(ctx, item)
 }
 
+func (p *Processor) StartProcessByID(ctx context.Context, id int64) (*QueueItem, error) {
+	item, err := p.store.ClaimQueueItemByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	go func(queueItem *QueueItem) {
+		runCtx := context.WithoutCancel(ctx)
+		if _, executeErr := p.execute(runCtx, queueItem); executeErr != nil {
+			queueLogger := p.queueItemLogger(queueItem)
+			queueLogger.Error().Err(executeErr).Msg("manual queue processing failed")
+		}
+	}(item)
+
+	return item, nil
+}
+
 func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, error) {
 	logger := p.queueItemLogger(item)
 	logger.Info().Msg("starting queue item processing")

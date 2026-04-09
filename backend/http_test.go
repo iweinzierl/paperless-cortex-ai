@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -178,6 +179,68 @@ func TestExtractDocumentIDFromURLSupportsFragmentPaths(t *testing.T) {
 	}
 	if documentID == nil || *documentID != 55 {
 		t.Fatalf("expected document ID 55, got %+v", documentID)
+	}
+}
+
+func TestProcessQueueItemAllowsRetryForFailedItems(t *testing.T) {
+	router, store := newWebhookTestRouter(t, "secret")
+
+	if err := store.CreateSession(t.Context(), Session{
+		Token:        "session-token",
+		Username:     "tester",
+		CreatedAtMS:  nowMS(),
+		ExpiresAtMS:  nowMS() + 60_000,
+		LastSeenAtMS: nowMS(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Retry me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+	startedAt := nowMS()
+	failedItem, err := store.MarkQueueItemFailed(
+		t.Context(),
+		item.ID,
+		"invalid llm output",
+		`{"failure":true}`,
+		"llama3.2",
+		"llava",
+		&startedAt,
+	)
+	if err != nil {
+		t.Fatalf("mark queue item failed: %v", err)
+	}
+
+	response := performWebhookRequest(
+		t,
+		router,
+		http.MethodPost,
+		fmt.Sprintf("/api/queue/%d/process", item.ID),
+		nil,
+		map[string]string{"Authorization": "Bearer session-token"},
+	)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var responseItem QueueItem
+	if err := json.Unmarshal(response.Body.Bytes(), &responseItem); err != nil {
+		t.Fatalf("decode process response: %v", err)
+	}
+	if responseItem.Status != "processing" {
+		t.Fatalf("expected response item status processing, got %q", responseItem.Status)
+	}
+	if responseItem.Attempts != failedItem.Attempts+1 {
+		t.Fatalf(
+			"expected attempts to increment from %d to %d after retry, got %d",
+			failedItem.Attempts,
+			failedItem.Attempts+1,
+			responseItem.Attempts,
+		)
 	}
 }
 
