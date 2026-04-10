@@ -17,6 +17,7 @@ class QueueScreen extends StatefulWidget {
 
 class _QueueScreenState extends State<QueueScreen> {
   static const Duration _pollInterval = Duration(seconds: 3);
+  static const int _pageSize = 25;
 
   bool _isLoading = true;
   bool _isFetching = false;
@@ -24,11 +25,14 @@ class _QueueScreenState extends State<QueueScreen> {
   List<QueueItem> _items = [];
   List<QueueItem> _activeItems = [];
   String _filterStatus = 'all';
+  String _searchQuery = '';
+  int _currentPage = 0;
   Timer? _pollTimer;
   Timer? _drawerCleanupTimer;
   QueueItem? _selectedResultItem;
   bool _isResultDrawerOpen = false;
   int? _removingItemId;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -38,6 +42,7 @@ class _QueueScreenState extends State<QueueScreen> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _pollTimer?.cancel();
     _drawerCleanupTimer?.cancel();
     super.dispose();
@@ -279,6 +284,33 @@ class _QueueScreenState extends State<QueueScreen> {
     return items.where((entry) => entry.id != id).toList();
   }
 
+  List<QueueItem> _filteredItems(List<QueueItem> items) {
+    final query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return items;
+    }
+
+    return items
+        .where((item) {
+          final haystack = [
+            item.documentTitle,
+            item.source,
+            item.status,
+            item.documentId?.toString() ?? '',
+            item.resultSummary ?? '',
+          ].join(' ').toLowerCase();
+          return haystack.contains(query);
+        })
+        .toList(growable: false);
+  }
+
+  int _pageCount(List<QueueItem> items) {
+    if (items.isEmpty) {
+      return 1;
+    }
+    return ((items.length - 1) / _pageSize).floor() + 1;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -303,6 +335,19 @@ class _QueueScreenState extends State<QueueScreen> {
         .where((i) => i.status == 'failed' || i.status == 'partially_completed')
         .length;
     int processingCount = _activeItems.length;
+    final filteredItems = _filteredItems(_items);
+    final totalPages = _pageCount(filteredItems);
+    final currentPage = totalPages == 0
+        ? 0
+        : _currentPage.clamp(0, totalPages - 1);
+    final startIndex = filteredItems.isEmpty ? 0 : currentPage * _pageSize;
+    final visibleItems = filteredItems
+        .skip(startIndex)
+        .take(_pageSize)
+        .toList(growable: false);
+    final endIndex = filteredItems.isEmpty
+        ? 0
+        : startIndex + visibleItems.length;
 
     return Stack(
       children: [
@@ -461,10 +506,17 @@ class _QueueScreenState extends State<QueueScreen> {
                               color: TailwindColors.surfaceContainerHighest,
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: const TextField(
-                              style: TextStyle(fontSize: 12),
-                              decoration: InputDecoration(
-                                hintText: 'Search documents...',
+                            child: TextField(
+                              controller: _searchController,
+                              onChanged: (value) {
+                                setState(() {
+                                  _searchQuery = value;
+                                  _currentPage = 0;
+                                });
+                              },
+                              style: const TextStyle(fontSize: 12),
+                              decoration: const InputDecoration(
+                                hintText: 'Search queue entries...',
                                 prefixIcon: Icon(
                                   Icons.search,
                                   size: 16,
@@ -540,12 +592,12 @@ class _QueueScreenState extends State<QueueScreen> {
                     ),
 
                     // Rows
-                    if (_items.isEmpty)
+                    if (filteredItems.isEmpty)
                       const Padding(
                         padding: EdgeInsets.all(40),
                         child: Center(
                           child: Text(
-                            'Queue is empty matching these filters.',
+                            'No queue entries match the current filters or search.',
                             style: TextStyle(
                               fontSize: 14,
                               color: TailwindColors.onSurfaceVariant,
@@ -554,7 +606,7 @@ class _QueueScreenState extends State<QueueScreen> {
                         ),
                       ),
 
-                    ..._items.map((item) => _buildQueueRow(item)),
+                    ...visibleItems.map((item) => _buildQueueRow(item)),
 
                     // Pagination Footer
                     Container(
@@ -571,9 +623,11 @@ class _QueueScreenState extends State<QueueScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text(
-                            'Showing most recent 100 queue entries',
-                            style: TextStyle(
+                          Text(
+                            filteredItems.isEmpty
+                                ? 'No queue entries to display'
+                                : 'Showing ${startIndex + 1}-$endIndex of ${filteredItems.length} queue entries',
+                            style: const TextStyle(
                               fontSize: 12,
                               color: TailwindColors.outline,
                             ),
@@ -581,15 +635,21 @@ class _QueueScreenState extends State<QueueScreen> {
                           Row(
                             children: [
                               IconButton(
-                                onPressed: () {},
+                                onPressed: currentPage > 0
+                                    ? () {
+                                        setState(() {
+                                          _currentPage = currentPage - 1;
+                                        });
+                                      }
+                                    : null,
                                 icon: const Icon(Icons.chevron_left, size: 20),
                                 color: TailwindColors.onSurfaceVariant,
                                 constraints: const BoxConstraints(),
                               ),
                               const SizedBox(width: 8),
-                              const Text(
-                                'Page 1 of 1',
-                                style: TextStyle(
+                              Text(
+                                'Page ${filteredItems.isEmpty ? 0 : currentPage + 1} of $totalPages',
+                                style: const TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                   color: TailwindColors.onSurface,
@@ -597,7 +657,13 @@ class _QueueScreenState extends State<QueueScreen> {
                               ),
                               const SizedBox(width: 8),
                               IconButton(
-                                onPressed: () {},
+                                onPressed: currentPage + 1 < totalPages
+                                    ? () {
+                                        setState(() {
+                                          _currentPage = currentPage + 1;
+                                        });
+                                      }
+                                    : null,
                                 icon: const Icon(Icons.chevron_right, size: 20),
                                 color: TailwindColors.onSurfaceVariant,
                                 constraints: const BoxConstraints(),

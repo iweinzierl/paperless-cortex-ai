@@ -9,6 +9,7 @@ import 'package:webapp/providers/auth_provider.dart';
 import 'package:webapp/widgets/app_layout.dart';
 import 'package:webapp/screens/dashboard_screen.dart';
 import 'package:webapp/screens/configuration_screen.dart';
+import 'package:webapp/screens/docs_screen.dart';
 import 'package:webapp/screens/queue_screen.dart';
 import 'package:webapp/screens/login_screen.dart';
 
@@ -79,6 +80,12 @@ class PaperlessAiExtApp extends StatelessWidget {
                 return const NoTransitionPage<void>(
                   child: ConfigurationScreen(),
                 );
+              },
+            ),
+            GoRoute(
+              path: '/docs',
+              pageBuilder: (BuildContext context, GoRouterState state) {
+                return const NoTransitionPage<void>(child: DocsScreen());
               },
             ),
           ],

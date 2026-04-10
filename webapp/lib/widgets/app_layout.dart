@@ -1,10 +1,57 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+import 'package:webapp/models/models.dart';
+import 'package:webapp/providers/auth_provider.dart';
+import 'package:webapp/services/api_service.dart';
 import 'package:webapp/theme.dart';
 
-class AppLayout extends StatelessWidget {
+class AppLayout extends StatefulWidget {
   final Widget child;
+
   const AppLayout({Key? key, required this.child}) : super(key: key);
+
+  @override
+  State<AppLayout> createState() => _AppLayoutState();
+}
+
+class _AppLayoutState extends State<AppLayout> {
+  SystemStatusModel? _status;
+  Timer? _statusTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+    _statusTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      _loadStatus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadStatus() async {
+    try {
+      final nextStatus = await context.read<ApiService>().getSystemStatus();
+      if (mounted) {
+        setState(() {
+          _status = nextStatus;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _status = null;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -12,12 +59,12 @@ class AppLayout extends StatelessWidget {
       backgroundColor: TailwindColors.surface,
       body: Row(
         children: [
-          const SideNavBar(),
+          SideNavBar(status: _status),
           Expanded(
             child: Column(
               children: [
-                const TopNavBar(),
-                Expanded(child: child),
+                TopNavBar(status: _status),
+                Expanded(child: widget.child),
               ],
             ),
           ),
@@ -28,10 +75,13 @@ class AppLayout extends StatelessWidget {
 }
 
 class SideNavBar extends StatelessWidget {
-  const SideNavBar({Key? key}) : super(key: key);
+  final SystemStatusModel? status;
+
+  const SideNavBar({Key? key, required this.status}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    final authProvider = context.watch<AuthProvider>();
     final location = GoRouterState.of(context).matchedLocation;
     return Container(
       width: 256,
@@ -55,8 +105,8 @@ class SideNavBar extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  'LLM Instance: Active',
-                  style: TextStyle(
+                  _dependencySummary('Ollama', status?.ollama),
+                  style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                     color: TailwindColors.outline,
@@ -66,38 +116,46 @@ class SideNavBar extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 32),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [
-                  TailwindColors.primary,
-                  TailwindColors.primaryContainer,
+          InkWell(
+            onTap: () => context.go('/queue'),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [
+                    TailwindColors.primary,
+                    TailwindColors.primaryContainer,
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: TailwindColors.primary.withValues(alpha: 0.3),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
                 ],
               ),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: TailwindColors.primary.withValues(alpha: 0.3),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.add, color: TailwindColors.onPrimary, size: 20),
-                SizedBox(width: 8),
-                Text(
-                  'New Prompt',
-                  style: TextStyle(
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.playlist_add_check,
                     color: TailwindColors.onPrimary,
-                    fontWeight: FontWeight.w600,
+                    size: 20,
                   ),
-                ),
-              ],
+                  SizedBox(width: 8),
+                  Text(
+                    'Review Queue',
+                    style: TextStyle(
+                      color: TailwindColors.onPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 32),
@@ -127,19 +185,34 @@ class SideNavBar extends StatelessWidget {
           _NavItem(
             icon: Icons.help_outline,
             title: 'Docs',
-            active: false,
-            onTap: () {},
+            active: location.startsWith('/docs'),
+            onTap: () => context.go('/docs'),
           ),
           const SizedBox(height: 4),
           _NavItem(
             icon: Icons.logout,
             title: 'Logout',
             active: false,
-            onTap: () => context.go('/login'),
+            onTap: () async {
+              await authProvider.logout();
+              if (context.mounted) {
+                context.go('/login');
+              }
+            },
           ),
         ],
       ),
     );
+  }
+
+  String _dependencySummary(String name, DependencyStatusModel? dependency) {
+    if (dependency == null) {
+      return '$name: Checking';
+    }
+    if (!dependency.configured) {
+      return '$name: Not configured';
+    }
+    return '$name: ${dependency.healthy ? 'Connected' : 'Unavailable'}';
   }
 }
 
@@ -199,10 +272,13 @@ class _NavItem extends StatelessWidget {
 }
 
 class TopNavBar extends StatelessWidget {
-  const TopNavBar({Key? key}) : super(key: key);
+  final SystemStatusModel? status;
+
+  const TopNavBar({Key? key, required this.status}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    final authProvider = context.watch<AuthProvider>();
     return Container(
       height: 64,
       decoration: BoxDecoration(
@@ -215,12 +291,40 @@ class TopNavBar extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Search
           SizedBox(
             width: 400,
             child: TextField(
+              onSubmitted: (value) {
+                final query = value.trim().toLowerCase();
+                if (query.isEmpty) {
+                  return;
+                }
+                if ('dashboard'.contains(query)) {
+                  context.go('/dashboard');
+                  return;
+                }
+                if ('queue'.contains(query)) {
+                  context.go('/queue');
+                  return;
+                }
+                if ('configuration settings config'.contains(query)) {
+                  context.go('/configuration');
+                  return;
+                }
+                if ('docs documentation help'.contains(query)) {
+                  context.go('/docs');
+                  return;
+                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'No quick navigation target matched that search.',
+                    ),
+                  ),
+                );
+              },
               decoration: InputDecoration(
-                hintText: 'Search prompts, documents, or models...',
+                hintText: 'Jump to dashboard, queue, configuration, or docs...',
                 hintStyle: const TextStyle(
                   color: TailwindColors.outline,
                   fontSize: 14,
@@ -240,19 +344,17 @@ class TopNavBar extends StatelessWidget {
               ),
             ),
           ),
-
-          // Profiles and Actions
           Row(
             children: [
               IconButton(
-                onPressed: () {},
+                onPressed: () => _showStatusDialog(context),
                 icon: const Icon(
                   Icons.notifications_none,
                   color: TailwindColors.outline,
                 ),
               ),
               IconButton(
-                onPressed: () {},
+                onPressed: () => context.go('/configuration'),
                 icon: const Icon(
                   Icons.dns_outlined,
                   color: TailwindColors.outline,
@@ -264,21 +366,23 @@ class TopNavBar extends StatelessWidget {
                 color: TailwindColors.surfaceContainerHigh,
                 margin: const EdgeInsets.symmetric(horizontal: 8),
               ),
-              const Column(
+              Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    'Administrator',
-                    style: TextStyle(
+                    authProvider.username?.trim().isNotEmpty == true
+                        ? authProvider.username!
+                        : 'Authenticated User',
+                    style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
                       color: TailwindColors.onSurface,
                     ),
                   ),
                   Text(
-                    'Node: Online',
-                    style: TextStyle(
+                    _paperlessSummary(status?.paperless),
+                    style: const TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w500,
                       color: TailwindColors.tertiary,
@@ -305,6 +409,84 @@ class TopNavBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  String _paperlessSummary(DependencyStatusModel? dependency) {
+    if (dependency == null) {
+      return 'Paperless: Checking';
+    }
+    if (!dependency.configured) {
+      return 'Paperless: Not configured';
+    }
+    return 'Paperless: ${dependency.healthy ? 'Connected' : 'Unavailable'}';
+  }
+
+  Future<void> _showStatusDialog(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('System status'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _StatusRow(label: 'Backend', dependency: status?.backend),
+              const SizedBox(height: 12),
+              _StatusRow(label: 'Paperless', dependency: status?.paperless),
+              const SizedBox(height: 12),
+              _StatusRow(label: 'Ollama', dependency: status?.ollama),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  final String label;
+  final DependencyStatusModel? dependency;
+
+  const _StatusRow({required this.label, required this.dependency});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = dependency == null
+        ? TailwindColors.outline
+        : !dependency!.configured
+        ? TailwindColors.secondary
+        : dependency!.healthy
+        ? TailwindColors.tertiary
+        : TailwindColors.error;
+    final message = dependency?.message ?? 'Status unavailable';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          margin: const EdgeInsets.only(top: 4),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            '$label: $message',
+            style: const TextStyle(
+              fontSize: 13,
+              color: TailwindColors.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

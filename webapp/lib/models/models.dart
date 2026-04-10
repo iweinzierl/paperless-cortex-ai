@@ -26,6 +26,51 @@ class Session {
   }
 }
 
+class DependencyStatusModel {
+  final bool configured;
+  final bool healthy;
+  final String message;
+  final int modelCount;
+
+  const DependencyStatusModel({
+    required this.configured,
+    required this.healthy,
+    required this.message,
+    this.modelCount = 0,
+  });
+
+  factory DependencyStatusModel.fromJson(Map<String, dynamic> json) {
+    return DependencyStatusModel(
+      configured: json['configured'] == true,
+      healthy: json['healthy'] == true,
+      message: _asString(json['message']) ?? '',
+      modelCount: _asInt(json['model_count']) ?? 0,
+    );
+  }
+}
+
+class SystemStatusModel {
+  final DependencyStatusModel backend;
+  final DependencyStatusModel paperless;
+  final DependencyStatusModel ollama;
+
+  const SystemStatusModel({
+    required this.backend,
+    required this.paperless,
+    required this.ollama,
+  });
+
+  factory SystemStatusModel.fromJson(Map<String, dynamic> json) {
+    return SystemStatusModel(
+      backend: DependencyStatusModel.fromJson(_asMap(json['backend']) ?? {}),
+      paperless: DependencyStatusModel.fromJson(
+        _asMap(json['paperless']) ?? {},
+      ),
+      ollama: DependencyStatusModel.fromJson(_asMap(json['ollama']) ?? {}),
+    );
+  }
+}
+
 class BackendConfig {
   final EngineConfig engine;
   final ProcessConfig process;
@@ -335,6 +380,7 @@ class SuggestionStageModel {
 }
 
 class ProcessingResultModel {
+  final ProcessingDocumentModel? document;
   final ProcessingPlanModel? plan;
   final ExtractionStageModel extraction;
   final SuggestionStageModel correspondent;
@@ -343,6 +389,7 @@ class ProcessingResultModel {
   final List<String> notes;
 
   ProcessingResultModel({
+    required this.document,
     required this.plan,
     required this.extraction,
     required this.correspondent,
@@ -362,6 +409,9 @@ class ProcessingResultModel {
     }
 
     return ProcessingResultModel(
+      document: _asMap(json['document']) != null
+          ? ProcessingDocumentModel.fromJson(_asMap(json['document'])!)
+          : null,
       plan: _asMap(json['plan']) != null
           ? ProcessingPlanModel.fromJson(_asMap(json['plan'])!)
           : null,
@@ -441,6 +491,35 @@ class ProcessingResultModel {
       return null;
     }
     return extraction.textPreview;
+  }
+}
+
+class ProcessingDocumentModel {
+  final int id;
+  final String title;
+  final int? correspondentId;
+  final String correspondentName;
+  final int? documentTypeId;
+  final String documentTypeName;
+
+  ProcessingDocumentModel({
+    required this.id,
+    required this.title,
+    this.correspondentId,
+    required this.correspondentName,
+    this.documentTypeId,
+    required this.documentTypeName,
+  });
+
+  factory ProcessingDocumentModel.fromJson(Map<String, dynamic> json) {
+    return ProcessingDocumentModel(
+      id: _asInt(json['id']) ?? 0,
+      title: _asString(json['title']) ?? '',
+      correspondentId: _asInt(json['correspondent_id']),
+      correspondentName: _asString(json['correspondent_name']) ?? '',
+      documentTypeId: _asInt(json['document_type_id']),
+      documentTypeName: _asString(json['document_type_name']) ?? '',
+    );
   }
 }
 

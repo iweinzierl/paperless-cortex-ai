@@ -264,6 +264,7 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 				return nil, recordErr
 			}
 		} else {
+			result.Document.CorrespondentName = resolveNamedEntityName(correspondents, document.CorrespondentID, result.Document.CorrespondentName)
 			logger.Info().Int("available_correspondent_count", len(correspondents)).Msg("loaded correspondents for suggestion stage")
 
 			historicalDocuments, err := client.ListDocuments(ctx, paperless.DocumentFilter{Limit: 200, Ordering: "-created"})
@@ -316,6 +317,7 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 				return nil, recordErr
 			}
 		} else {
+			result.Document.DocumentTypeName = resolveNamedEntityName(documentTypes, document.DocumentTypeID, result.Document.DocumentTypeName)
 			logger.Info().Int("available_document_type_count", len(documentTypes)).Msg("loaded document types for suggestion stage")
 
 			suggestion, err := classification.SuggestDocumentType(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, documentTypes)
@@ -431,6 +433,21 @@ func documentNeedsModelExtraction(document *paperless.Document) bool {
 	fileName := strings.ToLower(strings.TrimSpace(document.OriginalFileName))
 	ext := strings.ToLower(filepath.Ext(fileName))
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
+}
+
+func resolveNamedEntityName[T paperless.NamedEntity](items []T, id *int64, fallback string) string {
+	if trimmedFallback := strings.TrimSpace(fallback); trimmedFallback != "" {
+		return trimmedFallback
+	}
+	if id == nil {
+		return ""
+	}
+	for _, item := range items {
+		if item.GetID() == *id {
+			return strings.TrimSpace(item.GetName())
+		}
+	}
+	return ""
 }
 
 func processorDocumentName(document *paperless.Document, downloadedPath string) string {

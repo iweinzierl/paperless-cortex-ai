@@ -102,6 +102,15 @@ class ApiService {
     return Session.fromJson(jsonDecode(response.body));
   }
 
+  Future<SystemStatusModel> getSystemStatus() async {
+    final response = await http.get(
+      Uri.parse(baseUrl + '/status'),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+    return SystemStatusModel.fromJson(jsonDecode(response.body));
+  }
+
   Future<DashboardStats> getDashboard() async {
     final response = await http.get(
       Uri.parse(baseUrl + '/dashboard'),

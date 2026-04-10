@@ -283,6 +283,10 @@ class _DrawerBody extends StatelessWidget {
                   _buildSuggestionSection(
                     title: 'Correspondent',
                     stage: result.correspondent,
+                    currentLabel: _documentEntityLabel(
+                      name: result.document?.correspondentName,
+                      id: result.document?.correspondentId,
+                    ),
                     selectedLabel: _payloadString(
                       result.correspondent.payload,
                       'correspondent_name',
@@ -296,6 +300,10 @@ class _DrawerBody extends StatelessWidget {
                   _buildSuggestionSection(
                     title: 'Document Type',
                     stage: result.documentType,
+                    currentLabel: _documentEntityLabel(
+                      name: result.document?.documentTypeName,
+                      id: result.document?.documentTypeId,
+                    ),
                     selectedLabel: _payloadString(
                       result.documentType.payload,
                       'document_type_name',
@@ -510,9 +518,16 @@ class _DrawerBody extends StatelessWidget {
   Widget _buildSuggestionSection({
     required String title,
     required SuggestionStageModel stage,
+    String? currentLabel,
     String? selectedLabel,
     String? suggestedLabel,
   }) {
+    final comparison = _buildSuggestionComparison(
+      currentLabel: currentLabel,
+      selectedLabel: selectedLabel,
+      suggestedLabel: suggestedLabel,
+    );
+
     return _SectionCard(
       title: title,
       trailing: _StageBadge(status: stage.status),
@@ -524,13 +539,19 @@ class _DrawerBody extends StatelessWidget {
             runSpacing: 12,
             children: [
               _DetailMetric(
-                label: 'Selected',
+                label: 'Current in Paperless',
+                value: currentLabel == null || currentLabel.isEmpty
+                    ? '--'
+                    : currentLabel,
+              ),
+              _DetailMetric(
+                label: 'LLM Selected',
                 value: selectedLabel == null || selectedLabel.isEmpty
                     ? '--'
                     : selectedLabel,
               ),
               _DetailMetric(
-                label: 'Suggested New',
+                label: 'LLM Suggested New',
                 value: suggestedLabel == null || suggestedLabel.isEmpty
                     ? '--'
                     : suggestedLabel,
@@ -545,6 +566,10 @@ class _DrawerBody extends StatelessWidget {
               ),
             ],
           ),
+          if (comparison != null) ...[
+            const SizedBox(height: 14),
+            _ComparisonIndicator(comparison: comparison),
+          ],
           if (stage.error.isNotEmpty) ...[
             const SizedBox(height: 14),
             _CalloutText(text: stage.error, isError: true),
@@ -716,6 +741,65 @@ class _DrawerBody extends StatelessWidget {
         .where((entry) => entry.isNotEmpty)
         .toList(growable: false);
   }
+
+  static String? _documentEntityLabel({String? name, int? id}) {
+    final trimmedName = name?.trim() ?? '';
+    if (trimmedName.isNotEmpty) {
+      return trimmedName;
+    }
+    if (id != null && id > 0) {
+      return 'ID $id';
+    }
+    return null;
+  }
+
+  static _SuggestionComparison? _buildSuggestionComparison({
+    String? currentLabel,
+    String? selectedLabel,
+    String? suggestedLabel,
+  }) {
+    final current = currentLabel?.trim() ?? '';
+    final selected = selectedLabel?.trim() ?? '';
+    final suggested = suggestedLabel?.trim() ?? '';
+
+    if (selected.isEmpty && suggested.isEmpty) {
+      return null;
+    }
+
+    final proposed = selected.isNotEmpty ? selected : suggested;
+    final currentKey = current.toLowerCase();
+    final proposedKey = proposed.toLowerCase();
+    final matchesCurrent =
+        currentKey.isNotEmpty &&
+        proposedKey.isNotEmpty &&
+        currentKey == proposedKey;
+
+    if (matchesCurrent) {
+      return const _SuggestionComparison(
+        label: 'Matches current Paperless value',
+        isDifferent: false,
+      );
+    }
+
+    if (current.isEmpty) {
+      return const _SuggestionComparison(
+        label: 'Paperless has no current value; the LLM suggested setting one',
+        isDifferent: true,
+      );
+    }
+
+    return _SuggestionComparison(
+      label: 'Differs from current Paperless value: $current',
+      isDifferent: true,
+    );
+  }
+}
+
+class _SuggestionComparison {
+  final String label;
+  final bool isDifferent;
+
+  const _SuggestionComparison({required this.label, required this.isDifferent});
 }
 
 class _SectionCard extends StatelessWidget {
@@ -940,6 +1024,54 @@ class _CalloutText extends StatelessWidget {
               ? TailwindColors.onErrorContainer
               : TailwindColors.onSurfaceVariant,
         ),
+      ),
+    );
+  }
+}
+
+class _ComparisonIndicator extends StatelessWidget {
+  final _SuggestionComparison comparison;
+
+  const _ComparisonIndicator({required this.comparison});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDifferent = comparison.isDifferent;
+    final background = isDifferent
+        ? TailwindColors.secondaryContainer
+        : TailwindColors.tertiary.withValues(alpha: 0.16);
+    final foreground = isDifferent
+        ? TailwindColors.onSecondaryContainer
+        : TailwindColors.tertiary;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isDifferent ? Icons.compare_arrows : Icons.check_circle_outline,
+            size: 16,
+            color: foreground,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              comparison.label,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: foreground,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

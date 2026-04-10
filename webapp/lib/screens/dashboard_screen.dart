@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webapp/theme.dart';
 import 'package:webapp/services/api_service.dart';
+import 'package:webapp/services/file_download.dart';
 import 'package:webapp/models/models.dart';
 import 'package:webapp/widgets/process_result_drawer.dart';
 import 'package:intl/intl.dart';
@@ -109,6 +110,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return current;
   }
 
+  Future<void> _exportCsv() async {
+    final stats = _stats;
+    if (stats == null || stats.recentRuns.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('There is no processing history to export.'),
+        ),
+      );
+      return;
+    }
+
+    final rows = <String>[
+      'queue_id,document_id,document_title,status,source,used_llm,used_vision_llm,requested_at,completed_at,processing_duration_ms,attempts,result_summary',
+      ...stats.recentRuns.map((item) {
+        return [
+          item.id.toString(),
+          (item.documentId ?? '').toString(),
+          _csvField(item.documentTitle),
+          _csvField(item.status),
+          _csvField(item.source),
+          _csvField(item.usedLlm ?? ''),
+          _csvField(item.usedVisionLlm ?? ''),
+          _csvField(
+            DateTime.fromMillisecondsSinceEpoch(
+              item.requestedAtMs,
+            ).toIso8601String(),
+          ),
+          _csvField(item.completedAt?.toIso8601String() ?? ''),
+          (item.processingDurationMs ?? '').toString(),
+          item.attempts.toString(),
+          _csvField(item.resultSummary ?? ''),
+        ].join(',');
+      }),
+    ];
+
+    final fileName =
+        'processing-history-${DateTime.now().millisecondsSinceEpoch}.csv';
+    final downloaded = await downloadTextFile(
+      fileName: fileName,
+      content: rows.join('\n'),
+      mimeType: 'text/csv;charset=utf-8',
+    );
+
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          downloaded
+              ? 'Exported processing history as $fileName.'
+              : 'CSV export is only available in the web build.',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -210,7 +268,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           Row(
                             children: [
                               OutlinedButton(
-                                onPressed: () {},
+                                onPressed: _exportCsv,
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor:
                                       TailwindColors.onSurfaceVariant,
@@ -607,5 +665,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
     );
+  }
+
+  String _csvField(String value) {
+    return '"${value.replaceAll('"', '""')}"';
   }
 }

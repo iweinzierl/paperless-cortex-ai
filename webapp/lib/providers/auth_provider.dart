@@ -33,7 +33,9 @@ class AuthProvider extends ChangeNotifier {
   Future<void> login(String username, String password) async {
     final session = await apiService.login(username, password);
     _isAuthenticated = true;
-    _username = session.username;
+    _username = session.username.trim().isEmpty
+        ? username.trim()
+        : session.username;
     notifyListeners();
   }
 

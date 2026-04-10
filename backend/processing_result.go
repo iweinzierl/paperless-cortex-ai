@@ -41,11 +41,15 @@ type ProcessingResult struct {
 }
 
 type ProcessingDocumentSummary struct {
-	ID               int64    `json:"id"`
-	Title            string   `json:"title"`
-	TagIDs           []int64  `json:"tag_ids,omitempty"`
-	TagNames         []string `json:"tag_names,omitempty"`
-	OriginalFileName string   `json:"original_file_name,omitempty"`
+	ID                int64    `json:"id"`
+	Title             string   `json:"title"`
+	TagIDs            []int64  `json:"tag_ids,omitempty"`
+	TagNames          []string `json:"tag_names,omitempty"`
+	OriginalFileName  string   `json:"original_file_name,omitempty"`
+	CorrespondentID   *int64   `json:"correspondent_id,omitempty"`
+	CorrespondentName string   `json:"correspondent_name,omitempty"`
+	DocumentTypeID    *int64   `json:"document_type_id,omitempty"`
+	DocumentTypeName  string   `json:"document_type_name,omitempty"`
 }
 
 type ExtractionStageResult struct {
@@ -88,11 +92,15 @@ func newProcessingResult(document *paperless.Document, tagNames []string, plan P
 	}
 	if document != nil {
 		result.Document = ProcessingDocumentSummary{
-			ID:               document.ID,
-			Title:            document.Title,
-			TagIDs:           append([]int64(nil), document.TagIDs...),
-			TagNames:         append([]string(nil), tagNames...),
-			OriginalFileName: document.OriginalFileName,
+			ID:                document.ID,
+			Title:             document.Title,
+			TagIDs:            append([]int64(nil), document.TagIDs...),
+			TagNames:          append([]string(nil), tagNames...),
+			OriginalFileName:  document.OriginalFileName,
+			CorrespondentID:   document.CorrespondentID,
+			CorrespondentName: strings.TrimSpace(document.CorrespondentName),
+			DocumentTypeID:    document.DocumentTypeID,
+			DocumentTypeName:  strings.TrimSpace(document.DocumentTypeName),
 		}
 	}
 	return result

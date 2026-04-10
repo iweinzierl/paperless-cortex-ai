@@ -115,6 +115,19 @@ type paperlessTagsResponse struct {
 	Results []documentTag `json:"results"`
 }
 
+type dependencyStatusResponse struct {
+	Configured bool   `json:"configured"`
+	Healthy    bool   `json:"healthy"`
+	Message    string `json:"message"`
+	ModelCount int    `json:"model_count,omitempty"`
+}
+
+type systemStatusResponse struct {
+	Backend   dependencyStatusResponse `json:"backend"`
+	Paperless dependencyStatusResponse `json:"paperless"`
+	Ollama    dependencyStatusResponse `json:"ollama"`
+}
+
 func NewServer(store *Store, processor *Processor, logger zerolog.Logger, sharedSecret string) *Server {
 	return &Server{
 		store:        store,
@@ -133,6 +146,7 @@ func (s *Server) Router() *gin.Engine {
 
 	api := router.Group("/api")
 	api.GET("/health", s.handleHealth)
+	api.GET("/status", s.handleStatus)
 	api.POST("/auth/login", s.handleLogin)
 	api.POST("/webhooks/paperless", s.handlePaperlessWebhook)
 
@@ -154,6 +168,28 @@ func (s *Server) Router() *gin.Engine {
 
 func (s *Server) handleHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func (s *Server) handleStatus(c *gin.Context) {
+	cfg, err := s.store.LoadConfig(c.Request.Context())
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+	cfg.Normalize()
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	c.JSON(http.StatusOK, systemStatusResponse{
+		Backend: dependencyStatusResponse{
+			Configured: true,
+			Healthy:    true,
+			Message:    "Backend online",
+		},
+		Paperless: s.paperlessDependencyStatus(ctx, cfg),
+		Ollama:    s.ollamaDependencyStatus(ctx, cfg),
+	})
 }
 
 func (s *Server) handleLogin(c *gin.Context) {
@@ -409,6 +445,105 @@ func (s *Server) handleListPaperlessTags(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, payload.Results)
+}
+
+func (s *Server) paperlessDependencyStatus(ctx context.Context, cfg BackendConfig) dependencyStatusResponse {
+	if cfg.Paperless.PaperlessURL == "" || cfg.Paperless.PaperlessToken == "" {
+		return dependencyStatusResponse{
+			Configured: false,
+			Healthy:    false,
+			Message:    "Paperless not configured",
+		}
+	}
+
+	tagsURL := fmt.Sprintf("%s/api/tags/", strings.TrimRight(cfg.Paperless.PaperlessURL, "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tagsURL, nil)
+	if err != nil {
+		return dependencyStatusResponse{
+			Configured: true,
+			Healthy:    false,
+			Message:    "Paperless request failed",
+		}
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Token %s", cfg.Paperless.PaperlessToken))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return dependencyStatusResponse{
+			Configured: true,
+			Healthy:    false,
+			Message:    "Paperless unreachable",
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return dependencyStatusResponse{
+			Configured: true,
+			Healthy:    false,
+			Message:    fmt.Sprintf("Paperless returned %s", resp.Status),
+		}
+	}
+
+	return dependencyStatusResponse{
+		Configured: true,
+		Healthy:    true,
+		Message:    "Paperless connected",
+	}
+}
+
+func (s *Server) ollamaDependencyStatus(ctx context.Context, cfg BackendConfig) dependencyStatusResponse {
+	if cfg.LLMs.OllamaURL == "" {
+		return dependencyStatusResponse{
+			Configured: false,
+			Healthy:    false,
+			Message:    "Ollama not configured",
+		}
+	}
+
+	tagsURL := fmt.Sprintf("%s/api/tags", strings.TrimRight(cfg.LLMs.OllamaURL, "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tagsURL, nil)
+	if err != nil {
+		return dependencyStatusResponse{
+			Configured: true,
+			Healthy:    false,
+			Message:    "Ollama request failed",
+		}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return dependencyStatusResponse{
+			Configured: true,
+			Healthy:    false,
+			Message:    "Ollama unreachable",
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return dependencyStatusResponse{
+			Configured: true,
+			Healthy:    false,
+			Message:    fmt.Sprintf("Ollama returned %s", resp.Status),
+		}
+	}
+
+	var payload ollamaModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return dependencyStatusResponse{
+			Configured: true,
+			Healthy:    false,
+			Message:    "Ollama response invalid",
+		}
+	}
+
+	return dependencyStatusResponse{
+		Configured: true,
+		Healthy:    true,
+		Message:    "Ollama connected",
+		ModelCount: len(payload.Models),
+	}
 }
 
 func (s *Server) handlePaperlessWebhook(c *gin.Context) {

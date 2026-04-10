@@ -43,10 +43,10 @@ func TestProcessorProcessesDocumentTypeSuggestion(t *testing.T) {
 			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"document-type"}],"next":null}`))
 		case r.URL.Path == "/api/document_types/":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"results":[{"id":7,"name":"Invoice"}],"next":null}`))
+			_, _ = w.Write([]byte(`{"results":[{"id":5,"name":"Receipt"},{"id":7,"name":"Invoice"}],"next":null}`))
 		case r.URL.Path == "/api/documents/42/":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"id":42,"title":"April Invoice","original_file_name":"invoice.txt","tags":[1,2]}`))
+			_, _ = w.Write([]byte(`{"id":42,"title":"April Invoice","original_file_name":"invoice.txt","document_type":5,"tags":[1,2]}`))
 		case r.URL.Path == "/api/documents/42/download/":
 			w.Header().Set("Content-Type", "text/plain")
 			w.Header().Set("Content-Disposition", `attachment; filename="invoice.txt"`)
@@ -93,6 +93,12 @@ func TestProcessorProcessesDocumentTypeSuggestion(t *testing.T) {
 	}
 	if result.DocumentType.Status != stageStatusCompleted {
 		t.Fatalf("expected document type stage completed, got %+v", result.DocumentType)
+	}
+	if result.Document.DocumentTypeID == nil || *result.Document.DocumentTypeID != 5 {
+		t.Fatalf("expected current document type id in result document summary, got %+v", result.Document)
+	}
+	if result.Document.DocumentTypeName != "Receipt" {
+		t.Fatalf("expected current document type name in result document summary, got %+v", result.Document)
 	}
 	if result.Correspondent.Status != stageStatusSkipped {
 		t.Fatalf("expected correspondent stage skipped, got %+v", result.Correspondent)

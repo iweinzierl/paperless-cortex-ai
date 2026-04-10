@@ -32,8 +32,8 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
   final _ollamaUrlController = TextEditingController();
 
   String _processingMode = 'manual';
-  String _defaultLlm = 'mistral:latest';
-  String _visionLlm = 'llava:latest';
+  String _defaultLlm = '';
+  String _visionLlm = '';
   List<String> _availableModels = [];
   List<DocumentTag> _availableTags = [];
   bool _ollamaHealthy = false;
@@ -54,7 +54,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
     try {
       final api = context.read<ApiService>();
       final config = await api.getConfig();
-      
+
       bool isHealthy = false;
       List<String> availableMods = [];
       try {
@@ -93,10 +93,12 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
           _compController.text = config.process.processCompletedTag;
 
           _ollamaUrlController.text = config.llms.ollamaUrl;
-          if (config.llms.defaultLlm.isNotEmpty)
-            _defaultLlm = config.llms.defaultLlm;
-          if (config.llms.visionLlm.isNotEmpty)
-            _visionLlm = config.llms.visionLlm;
+          _defaultLlm = config.llms.defaultLlm.isNotEmpty
+              ? config.llms.defaultLlm
+              : (availableMods.isNotEmpty ? availableMods.first : '');
+          _visionLlm = config.llms.visionLlm.isNotEmpty
+              ? config.llms.visionLlm
+              : (availableMods.isNotEmpty ? availableMods.first : '');
 
           _isLoading = false;
         });
@@ -344,7 +346,11 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                           ],
                         ),
                         const SizedBox(height: 24),
-                        _buildTagAutocompleteField('COMPLETED', null, _compController),
+                        _buildTagAutocompleteField(
+                          'COMPLETED',
+                          null,
+                          _compController,
+                        ),
                       ],
                     ),
                     const SizedBox(height: 32),
@@ -656,30 +662,40 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
             }
             return _availableTags
                 .map((t) => t.name)
-                .where((name) => name.toLowerCase().contains(textEditingValue.text.toLowerCase()));
+                .where(
+                  (name) => name.toLowerCase().contains(
+                    textEditingValue.text.toLowerCase(),
+                  ),
+                );
           },
-          fieldViewBuilder: (context, fieldTextEditingController, fieldFocusNode, onFieldSubmitted) {
-            return TextField(
-              controller: fieldTextEditingController,
-              focusNode: fieldFocusNode,
-              onSubmitted: (String value) {
-                onFieldSubmitted();
+          fieldViewBuilder:
+              (
+                context,
+                fieldTextEditingController,
+                fieldFocusNode,
+                onFieldSubmitted,
+              ) {
+                return TextField(
+                  controller: fieldTextEditingController,
+                  focusNode: fieldFocusNode,
+                  onSubmitted: (String value) {
+                    onFieldSubmitted();
+                  },
+                  style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: TailwindColors.surfaceContainerHighest,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 16,
+                    ),
+                  ),
+                );
               },
-              style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: TailwindColors.surfaceContainerHighest,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 16,
-                ),
-              ),
-            );
-          },
           optionsViewBuilder: (context, onSelected, options) {
             return Align(
               alignment: Alignment.topLeft,
@@ -702,7 +718,10 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                         onTap: () => onSelected(option),
                         child: Padding(
                           padding: const EdgeInsets.all(12),
-                          child: Text(option, style: const TextStyle(fontFamily: 'monospace')),
+                          child: Text(
+                            option,
+                            style: const TextStyle(fontFamily: 'monospace'),
+                          ),
                         ),
                       );
                     },

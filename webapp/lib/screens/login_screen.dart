@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:webapp/models/models.dart';
 import 'package:webapp/theme.dart';
 import 'package:webapp/services/api_service.dart';
 import 'package:webapp/providers/auth_provider.dart';
@@ -16,6 +17,13 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
   String? _errorMessage;
+  SystemStatusModel? _systemStatus;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSystemStatus();
+  }
 
   @override
   void dispose() {
@@ -44,6 +52,43 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _loadSystemStatus() async {
+    try {
+      final status = await context.read<ApiService>().getSystemStatus();
+      if (mounted) {
+        setState(() {
+          _systemStatus = status;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _systemStatus = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _showForgotCredentialsDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Paperless credentials'),
+          content: const Text(
+            'This login uses your Paperless-ngx username and password. If you need to recover or reset credentials, do that in Paperless-ngx or the identity provider behind it.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -254,7 +299,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                               ),
                               TextButton(
-                                onPressed: () {},
+                                onPressed: _showForgotCredentialsDialog,
                                 style: TextButton.styleFrom(
                                   padding: EdgeInsets.zero,
                                   minimumSize: Size.zero,
@@ -362,13 +407,21 @@ class _LoginScreenState extends State<LoginScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               _buildStatusIndicator(
-                                TailwindColors.tertiary,
-                                'LLM Node Active',
+                                _statusColor(_systemStatus?.backend),
+                                _statusLabel('Backend', _systemStatus?.backend),
                               ),
                               const SizedBox(width: 16),
                               _buildStatusIndicator(
-                                TailwindColors.tertiary,
-                                'Paperless Connected',
+                                _statusColor(_systemStatus?.paperless),
+                                _statusLabel(
+                                  'Paperless',
+                                  _systemStatus?.paperless,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              _buildStatusIndicator(
+                                _statusColor(_systemStatus?.ollama),
+                                _statusLabel('Ollama', _systemStatus?.ollama),
                               ),
                             ],
                           ),
@@ -404,5 +457,25 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ],
     );
+  }
+
+  Color _statusColor(DependencyStatusModel? status) {
+    if (status == null) {
+      return TailwindColors.outline;
+    }
+    if (!status.configured) {
+      return TailwindColors.secondary;
+    }
+    return status.healthy ? TailwindColors.tertiary : TailwindColors.error;
+  }
+
+  String _statusLabel(String name, DependencyStatusModel? status) {
+    if (status == null) {
+      return '$name: checking';
+    }
+    if (!status.configured) {
+      return '$name: not configured';
+    }
+    return '$name: ${status.healthy ? 'connected' : 'unavailable'}';
   }
 }

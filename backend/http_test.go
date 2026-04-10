@@ -232,6 +232,72 @@ func TestExtractDocumentIDFromURLSupportsFragmentPaths(t *testing.T) {
 	}
 }
 
+func TestStatusEndpointReportsDependencyHealth(t *testing.T) {
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"mistral:latest","model":"mistral:latest","modified_at":"2026-01-01T00:00:00Z","size":1,"digest":"abc","details":{}}]}`))
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags/" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Token paperless-token" {
+			t.Fatalf("expected paperless authorization header, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":1,"results":[{"id":1,"name":"process"}]}`))
+	}))
+	defer paperlessServer.Close()
+
+	router, store := newWebhookTestRouter(t, "secret")
+	if err := store.SaveConfig(t.Context(), BackendConfig{
+		Engine:    EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "paperless-token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	response := performWebhookRequest(t, router, http.MethodGet, "/api/status", nil, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload struct {
+		Backend struct {
+			Healthy bool `json:"healthy"`
+		} `json:"backend"`
+		Paperless struct {
+			Configured bool `json:"configured"`
+			Healthy    bool `json:"healthy"`
+		} `json:"paperless"`
+		Ollama struct {
+			Configured bool `json:"configured"`
+			Healthy    bool `json:"healthy"`
+			ModelCount int  `json:"model_count"`
+		} `json:"ollama"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
+	if !payload.Backend.Healthy {
+		t.Fatalf("expected backend healthy response")
+	}
+	if !payload.Paperless.Configured || !payload.Paperless.Healthy {
+		t.Fatalf("expected healthy paperless status, got %+v", payload.Paperless)
+	}
+	if !payload.Ollama.Configured || !payload.Ollama.Healthy || payload.Ollama.ModelCount != 1 {
+		t.Fatalf("expected healthy ollama status, got %+v", payload.Ollama)
+	}
+}
+
 func TestProcessQueueItemAllowsRetryForFailedItems(t *testing.T) {
 	router, store := newWebhookTestRouter(t, "secret")
 
