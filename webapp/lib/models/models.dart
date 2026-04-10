@@ -510,7 +510,12 @@ class QueueItem {
 
   bool get isProcessing => status == 'processing';
 
-  bool get canViewResultDetails => status == 'completed' || status == 'failed';
+  bool get isPartiallyCompleted => status == 'partially_completed';
+
+  bool get canViewResultDetails =>
+      status == 'completed' ||
+      status == 'failed' ||
+      status == 'partially_completed';
 
   bool get canRemoveFromQueue => status != 'processing';
 

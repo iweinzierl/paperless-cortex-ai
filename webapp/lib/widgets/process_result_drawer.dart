@@ -376,6 +376,7 @@ class _DrawerBody extends StatelessWidget {
 
   Widget _buildOutcomeSummary(ProcessingResultModel? result) {
     final isFailed = item.status == 'failed';
+    final isPartial = item.status == 'partially_completed';
     final summary = item.detailSummary;
     return Container(
       width: double.infinity,
@@ -383,6 +384,8 @@ class _DrawerBody extends StatelessWidget {
       decoration: BoxDecoration(
         color: isFailed
             ? TailwindColors.errorContainer
+            : isPartial
+            ? TailwindColors.secondaryContainer
             : TailwindColors.primaryFixed.withValues(alpha: 0.40),
         borderRadius: BorderRadius.circular(16),
       ),
@@ -390,13 +393,19 @@ class _DrawerBody extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            isFailed ? 'Failure Summary' : 'Result Summary',
+            isFailed
+                ? 'Failure Summary'
+                : isPartial
+                ? 'Partial Result Summary'
+                : 'Result Summary',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.8,
               color: isFailed
                   ? TailwindColors.onErrorContainer
+                  : isPartial
+                  ? TailwindColors.onSecondaryContainer
                   : TailwindColors.onPrimaryFixedVariant,
             ),
           ),
@@ -408,6 +417,8 @@ class _DrawerBody extends StatelessWidget {
               height: 1.45,
               color: isFailed
                   ? TailwindColors.onErrorContainer
+                  : isPartial
+                  ? TailwindColors.onSecondaryContainer
                   : TailwindColors.onSurface,
             ),
           ),
@@ -941,6 +952,11 @@ class _CalloutText extends StatelessWidget {
         background: TailwindColors.tertiary.withValues(alpha: 0.16),
         foreground: TailwindColors.tertiary,
       );
+    case 'partially_completed':
+      return (
+        background: TailwindColors.secondaryContainer,
+        foreground: TailwindColors.onSecondaryContainer,
+      );
     case 'failed':
       return (
         background: TailwindColors.errorContainer,
@@ -969,6 +985,8 @@ IconData _statusIcon(String status) {
   switch (status) {
     case 'completed':
       return Icons.check_circle;
+    case 'partially_completed':
+      return Icons.warning_amber_rounded;
     case 'failed':
       return Icons.error;
     case 'running':

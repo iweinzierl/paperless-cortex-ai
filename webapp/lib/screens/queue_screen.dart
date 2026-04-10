@@ -299,7 +299,9 @@ class _QueueScreenState extends State<QueueScreen> {
     }
 
     int pendingCount = _items.where((i) => i.status == 'pending').length;
-    int errorCount = _items.where((i) => i.status == 'failed').length;
+    int errorCount = _items
+        .where((i) => i.status == 'failed' || i.status == 'partially_completed')
+        .length;
     int processingCount = _activeItems.length;
 
     return Stack(
@@ -437,6 +439,10 @@ class _QueueScreenState extends State<QueueScreen> {
                                   DropdownMenuItem(
                                     value: 'completed',
                                     child: Text('Completed'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'partially_completed',
+                                    child: Text('Partially Completed'),
                                   ),
                                   DropdownMenuItem(
                                     value: 'failed',
@@ -1002,6 +1008,10 @@ class _QueueScreenState extends State<QueueScreen> {
         statusColor = TailwindColors.tertiary;
         statusBgColor = TailwindColors.tertiaryFixed;
         break;
+      case 'partially_completed':
+        statusColor = TailwindColors.secondary;
+        statusBgColor = TailwindColors.secondaryContainer;
+        break;
       case 'failed':
         statusColor = TailwindColors.error;
         statusBgColor = TailwindColors.errorContainer;
@@ -1129,7 +1139,8 @@ class _QueueScreenState extends State<QueueScreen> {
                           : () => _processItem(item.id),
                     ),
                   )
-                else if (item.status == 'failed')
+                else if (item.status == 'failed' ||
+                    item.status == 'partially_completed')
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: OutlinedButton.icon(

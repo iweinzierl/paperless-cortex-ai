@@ -108,6 +108,59 @@ func TestClaimQueueItemByIDAllowsRetryForFailedItems(t *testing.T) {
 	}
 }
 
+func TestClaimQueueItemByIDAllowsRetryForPartiallyCompletedItems(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Partial retry", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	startedAt := int64(1234)
+	partialItem, err := store.MarkQueueItemPartiallyCompleted(
+		t.Context(),
+		item.ID,
+		"Completed document type suggestion.",
+		"correspondent suggestion: invalid llm output",
+		`{"document_type":{"status":"completed"}}`,
+		"llama3.2",
+		"llava",
+		&startedAt,
+	)
+	if err != nil {
+		t.Fatalf("mark queue item partially completed: %v", err)
+	}
+	if partialItem.Status != queueItemStatusPartiallyCompleted {
+		t.Fatalf("expected partially completed status, got %q", partialItem.Status)
+	}
+
+	retriedItem, err := store.ClaimQueueItemByID(t.Context(), item.ID)
+	if err != nil {
+		t.Fatalf("claim partially completed queue item by id: %v", err)
+	}
+	if retriedItem.Status != queueItemStatusProcessing {
+		t.Fatalf("expected processing status after retry claim, got %q", retriedItem.Status)
+	}
+	if retriedItem.Attempts != partialItem.Attempts+1 {
+		t.Fatalf("expected attempts to increment from %d to %d, got %d", partialItem.Attempts, partialItem.Attempts+1, retriedItem.Attempts)
+	}
+	if retriedItem.LastError != "" {
+		t.Fatalf("expected last_error to be cleared on retry claim, got %q", retriedItem.LastError)
+	}
+	if retriedItem.ResultSummary != "" {
+		t.Fatalf("expected result_summary to be cleared on retry claim, got %q", retriedItem.ResultSummary)
+	}
+}
+
 func TestDeleteQueueItemRemovesNonProcessingItems(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
 	store, err := OpenStore(databasePath)

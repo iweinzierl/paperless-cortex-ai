@@ -358,6 +358,104 @@ func TestProcessorUsesHistoricalDocumentsForCorrespondentSuggestion(t *testing.T
 	}
 }
 
+func TestProcessorContinuesAfterSuggestionStageFailure(t *testing.T) {
+	ollamaRequests := 0
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		ollamaRequests++
+		if ollamaRequests == 1 {
+			http.Error(w, "correspondent model failure", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"document_type_id\":7,\"document_type_name\":\"Invoice\",\"suggested_new_document_type\":null,\"confidence\":\"high\",\"reasoning\":\"Matches invoice wording\"}"}}`))
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"correspondent"},{"id":3,"name":"document-type"}],"next":null}`))
+		case r.URL.Path == "/api/correspondents/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":12,"name":"Telekom"}],"next":null}`))
+		case r.URL.Path == "/api/document_types/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":7,"name":"Invoice"}],"next":null}`))
+		case r.URL.Path == "/api/documents/" && r.URL.Query().Get("ordering") == "-created":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[],"next":null}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"April Invoice","original_file_name":"invoice.txt","tags":[1,2,3]}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="invoice.txt"`)
+			_, _ = w.Write([]byte("Invoice text from processor test"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:       "process",
+			ProcessCorrespondentTag: "correspondent",
+			ProcessDocumentTypeTag:  "document-type",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	documentID := int64(42)
+	if _, err := store.CreateQueueItem(t.Context(), &documentID, "April Invoice", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	item, err := processor.ProcessNext(t.Context())
+	if err != nil {
+		t.Fatalf("process next queue item: %v", err)
+	}
+	if item.Status != queueItemStatusPartiallyCompleted {
+		t.Fatalf("expected partially completed status for partial processing failure, got %q", item.Status)
+	}
+	if ollamaRequests != 2 {
+		t.Fatalf("expected 2 ollama requests, got %d", ollamaRequests)
+	}
+	if !strings.Contains(item.LastError, "correspondent suggestion") {
+		t.Fatalf("expected stage failure in last error, got %q", item.LastError)
+	}
+	if !strings.Contains(item.ResultSummary, "document type suggestion") {
+		t.Fatalf("expected successful stage summary to be preserved, got %q", item.ResultSummary)
+	}
+
+	var result ProcessingResult
+	if err := json.Unmarshal([]byte(item.ResultPayload), &result); err != nil {
+		t.Fatalf("decode result payload: %v", err)
+	}
+	if result.Correspondent.Status != stageStatusFailed {
+		t.Fatalf("expected correspondent stage failed, got %+v", result.Correspondent)
+	}
+	if result.DocumentType.Status != stageStatusCompleted {
+		t.Fatalf("expected document type stage completed, got %+v", result.DocumentType)
+	}
+	if !strings.Contains(item.ResultPayload, `"document_type_id":7`) {
+		t.Fatalf("expected document type suggestion in result payload, got %s", item.ResultPayload)
+	}
+	if result.Extraction.Status != stageStatusCompleted {
+		t.Fatalf("expected extraction stage completed, got %+v", result.Extraction)
+	}
+}
+
 func newProcessorTestHarness(t *testing.T) (*Processor, *Store) {
 	t.Helper()
 

@@ -239,6 +239,18 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Int("text_length", len(extraction.Text)).
 		Msg("completed extraction stage")
 
+	stageFailures := make([]string, 0, 3)
+	recordStageFailure := func(stageLabel string, cause error) error {
+		failureMessage := fmt.Sprintf("%s: %v", stageLabel, cause)
+		stageFailures = append(stageFailures, failureMessage)
+		logger.Error().Err(cause).Str("stage", stageLabel).Msg("processing stage failed; continuing with remaining stages")
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			_, failErr := p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist %s progress: %v", stageLabel, err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+			return failErr
+		}
+		return nil
+	}
+
 	if plan.Correspondent {
 		logger.Info().Msg("starting correspondent suggestion stage")
 		result.Correspondent = SuggestionStageResult{Status: stageStatusRunning, UsedModel: cfg.LLMs.DefaultLLM}
@@ -248,42 +260,47 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		correspondents, err := client.ListCorrespondents(ctx)
 		if err != nil {
 			result.Correspondent = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("list correspondents: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
-		}
-		logger.Info().Int("available_correspondent_count", len(correspondents)).Msg("loaded correspondents for suggestion stage")
-
-		historicalDocuments, err := client.ListDocuments(ctx, paperless.DocumentFilter{Limit: 200, Ordering: "-created"})
-		if err != nil {
-			logger.Warn().Err(err).Msg("failed to load historical documents for correspondent ranking; continuing without library evidence")
-			historicalDocuments = nil
-		} else if len(historicalDocuments) > 0 {
-			filteredDocuments := historicalDocuments[:0]
-			for _, historicalDocument := range historicalDocuments {
-				if historicalDocument.ID == document.ID {
-					continue
-				}
-				filteredDocuments = append(filteredDocuments, historicalDocument)
+			if recordErr := recordStageFailure("correspondent suggestion", err); recordErr != nil {
+				return nil, recordErr
 			}
-			historicalDocuments = filteredDocuments
-			logger.Info().Int("historical_document_count", len(historicalDocuments)).Msg("loaded historical documents for correspondent ranking")
-		}
+		} else {
+			logger.Info().Int("available_correspondent_count", len(correspondents)).Msg("loaded correspondents for suggestion stage")
 
-		suggestion, err := classification.SuggestCorrespondent(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, correspondents, historicalDocuments)
-		if err != nil {
-			result.Correspondent = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("suggest correspondent: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
-		}
+			historicalDocuments, err := client.ListDocuments(ctx, paperless.DocumentFilter{Limit: 200, Ordering: "-created"})
+			if err != nil {
+				logger.Warn().Err(err).Msg("failed to load historical documents for correspondent ranking; continuing without library evidence")
+				historicalDocuments = nil
+			} else if len(historicalDocuments) > 0 {
+				filteredDocuments := historicalDocuments[:0]
+				for _, historicalDocument := range historicalDocuments {
+					if historicalDocument.ID == document.ID {
+						continue
+					}
+					filteredDocuments = append(filteredDocuments, historicalDocument)
+				}
+				historicalDocuments = filteredDocuments
+				logger.Info().Int("historical_document_count", len(historicalDocuments)).Msg("loaded historical documents for correspondent ranking")
+			}
 
-		result.Correspondent = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, correspondentStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
-		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist correspondent progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+			suggestion, err := classification.SuggestCorrespondent(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, correspondents, historicalDocuments)
+			if err != nil {
+				result.Correspondent = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
+				if recordErr := recordStageFailure("correspondent suggestion", err); recordErr != nil {
+					return nil, recordErr
+				}
+			} else {
+				result.Correspondent = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, correspondentStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+				if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+					return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist correspondent progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+				}
+				logger.Info().
+					Str("confidence", suggestion.Confidence).
+					Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
+					Str("correspondent_name", pointerString(suggestion.CorrespondentName)).
+					Str("suggested_new_correspondent", pointerString(suggestion.SuggestedNewCorrespondent)).
+					Msg("completed correspondent suggestion stage")
+			}
 		}
-		logger.Info().
-			Str("confidence", suggestion.Confidence).
-			Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
-			Str("correspondent_name", pointerString(suggestion.CorrespondentName)).
-			Str("suggested_new_correspondent", pointerString(suggestion.SuggestedNewCorrespondent)).
-			Msg("completed correspondent suggestion stage")
 	}
 
 	if plan.DocumentType {
@@ -295,26 +312,31 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		documentTypes, err := client.ListDocumentTypes(ctx)
 		if err != nil {
 			result.DocumentType = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("list document types: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
-		}
-		logger.Info().Int("available_document_type_count", len(documentTypes)).Msg("loaded document types for suggestion stage")
+			if recordErr := recordStageFailure("document type suggestion", err); recordErr != nil {
+				return nil, recordErr
+			}
+		} else {
+			logger.Info().Int("available_document_type_count", len(documentTypes)).Msg("loaded document types for suggestion stage")
 
-		suggestion, err := classification.SuggestDocumentType(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, documentTypes)
-		if err != nil {
-			result.DocumentType = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("suggest document type: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+			suggestion, err := classification.SuggestDocumentType(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, documentTypes)
+			if err != nil {
+				result.DocumentType = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
+				if recordErr := recordStageFailure("document type suggestion", err); recordErr != nil {
+					return nil, recordErr
+				}
+			} else {
+				result.DocumentType = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, documentTypeStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+				if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+					return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist document type progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+				}
+				logger.Info().
+					Str("confidence", suggestion.Confidence).
+					Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
+					Str("document_type_name", pointerString(suggestion.DocumentTypeName)).
+					Str("suggested_new_document_type", pointerString(suggestion.SuggestedNewDocumentType)).
+					Msg("completed document type suggestion stage")
+			}
 		}
-
-		result.DocumentType = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, documentTypeStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
-		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist document type progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
-		}
-		logger.Info().
-			Str("confidence", suggestion.Confidence).
-			Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
-			Str("document_type_name", pointerString(suggestion.DocumentTypeName)).
-			Str("suggested_new_document_type", pointerString(suggestion.SuggestedNewDocumentType)).
-			Msg("completed document type suggestion stage")
 	}
 
 	if plan.DocumentTags {
@@ -326,19 +348,21 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		suggestion, err := classification.SuggestTags(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, tags)
 		if err != nil {
 			result.Tags = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("suggest tags: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+			if recordErr := recordStageFailure("tag suggestion", err); recordErr != nil {
+				return nil, recordErr
+			}
+		} else {
+			result.Tags = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, tagsStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+			if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+				return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist tag progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+			}
+			logger.Info().
+				Str("confidence", suggestion.Confidence).
+				Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
+				Strs("selected_tags", suggestion.TagNames).
+				Strs("suggested_new_tags", suggestion.SuggestedNewTags).
+				Msg("completed tag suggestion stage")
 		}
-
-		result.Tags = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, tagsStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
-		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
-			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist tag progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
-		}
-		logger.Info().
-			Str("confidence", suggestion.Confidence).
-			Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
-			Strs("selected_tags", suggestion.TagNames).
-			Strs("suggested_new_tags", suggestion.SuggestedNewTags).
-			Msg("completed tag suggestion stage")
 	}
 
 	resultSummary := summarizeProcessingResult(result)
@@ -346,6 +370,9 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Str("result_summary", resultSummary).
 		Str("result_payload", truncateLogValue(result.Marshal(), 4000)).
 		Msg("processed queue item")
+	if len(stageFailures) > 0 {
+		return p.store.MarkQueueItemPartiallyCompleted(ctx, item.ID, resultSummary, strings.Join(stageFailures, "; "), result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel, item.StartedAtMS)
+	}
 	return p.store.MarkQueueItemCompleted(ctx, item.ID, resultSummary, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel, item.StartedAtMS)
 }
 

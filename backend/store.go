@@ -21,6 +21,14 @@ var errQueueItemNotFound = errors.New("queue item not found")
 var errQueueItemNotRemovable = errors.New("queue item is not removable")
 var errNoPendingQueueItems = errors.New("no pending queue items")
 
+const (
+	queueItemStatusPending            = "pending"
+	queueItemStatusProcessing         = "processing"
+	queueItemStatusCompleted          = "completed"
+	queueItemStatusPartiallyCompleted = "partially_completed"
+	queueItemStatusFailed             = "failed"
+)
+
 type Store struct {
 	db *sql.DB
 }
@@ -301,10 +309,10 @@ func (s *Store) FindActiveQueueItemByDocumentID(ctx context.Context, documentID 
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
-		WHERE document_id = ? AND status IN ('pending', 'processing')
+		WHERE document_id = ? AND status IN (?, ?)
 		ORDER BY requested_at_ms ASC
 		LIMIT 1
-	`, documentID)
+	`, documentID, queueItemStatusPending, queueItemStatusProcessing)
 
 	item, err := scanQueueItem(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -329,8 +337,8 @@ func (s *Store) CreateQueueItemWithRequestedStages(ctx context.Context, document
 	}
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO queue_items(document_id, document_title, source, trigger_source, status, payload, requested_stages, requested_at_ms)
-		VALUES(?, ?, ?, ?, 'pending', ?, ?, ?)
-	`, documentID, documentTitle, source, trigger, payload, requestedStagesJSON, requestedAtMS)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+	`, documentID, documentTitle, source, trigger, queueItemStatusPending, payload, requestedStagesJSON, requestedAtMS)
 	if err != nil {
 		return nil, fmt.Errorf("create queue item: %w", err)
 	}
@@ -416,10 +424,10 @@ func (s *Store) ClaimNextPendingQueueItem(ctx context.Context) (*QueueItem, erro
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
 		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
 		FROM queue_items
-		WHERE status = 'pending'
+		WHERE status = ?
 		ORDER BY requested_at_ms ASC
 		LIMIT 1
-	`)
+	`, queueItemStatusPending)
 
 	item, err := scanQueueItem(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -432,9 +440,9 @@ func (s *Store) ClaimNextPendingQueueItem(ctx context.Context) (*QueueItem, erro
 	startedAtMS := nowMS()
 	result, err := transaction.ExecContext(ctx, `
 		UPDATE queue_items
-		SET status = 'processing', started_at_ms = ?, attempts = attempts + 1
-		WHERE id = ? AND status = 'pending'
-	`, startedAtMS, item.ID)
+		SET status = ?, started_at_ms = ?, attempts = attempts + 1
+		WHERE id = ? AND status = ?
+	`, queueItemStatusProcessing, startedAtMS, item.ID, queueItemStatusPending)
 	if err != nil {
 		return nil, fmt.Errorf("claim next queue item: %w", err)
 	}
@@ -451,7 +459,7 @@ func (s *Store) ClaimNextPendingQueueItem(ctx context.Context) (*QueueItem, erro
 		return nil, fmt.Errorf("commit queue claim: %w", err)
 	}
 
-	item.Status = "processing"
+	item.Status = queueItemStatusProcessing
 	item.Attempts++
 	item.StartedAtMS = &startedAtMS
 	return item, nil
@@ -479,17 +487,17 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 	if err != nil {
 		return nil, fmt.Errorf("select queue item: %w", err)
 	}
-	if item.Status != "pending" && item.Status != "failed" {
+	if item.Status != queueItemStatusPending && item.Status != queueItemStatusFailed && item.Status != queueItemStatusPartiallyCompleted {
 		return nil, errQueueItemNotRetryable
 	}
 
 	startedAtMS := nowMS()
 	result, err := transaction.ExecContext(ctx, `
 		UPDATE queue_items
-		SET status = 'processing', started_at_ms = ?, completed_at_ms = NULL, attempts = attempts + 1,
+		SET status = ?, started_at_ms = ?, completed_at_ms = NULL, attempts = attempts + 1,
 		    last_error = '', result_summary = '', result_payload = '', used_llm = '', used_vision_llm = '', processing_duration_ms = NULL
-		WHERE id = ? AND status IN ('pending', 'failed')
-	`, startedAtMS, item.ID)
+		WHERE id = ? AND status IN (?, ?, ?)
+	`, queueItemStatusProcessing, startedAtMS, item.ID, queueItemStatusPending, queueItemStatusFailed, queueItemStatusPartiallyCompleted)
 	if err != nil {
 		return nil, fmt.Errorf("claim queue item: %w", err)
 	}
@@ -506,7 +514,7 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 		return nil, fmt.Errorf("commit queue claim: %w", err)
 	}
 
-	item.Status = "processing"
+	item.Status = queueItemStatusProcessing
 	item.Attempts++
 	item.StartedAtMS = &startedAtMS
 	item.CompletedAtMS = nil
@@ -533,14 +541,14 @@ func (s *Store) DeleteQueueItem(ctx context.Context, id int64) error {
 		return fmt.Errorf("select queue item for delete: %w", err)
 	}
 
-	if status == "processing" {
+	if status == queueItemStatusProcessing {
 		return errQueueItemNotRemovable
 	}
 
 	result, err := transaction.ExecContext(ctx, `
 		DELETE FROM queue_items
-		WHERE id = ? AND status <> 'processing'
-	`, id)
+		WHERE id = ? AND status <> ?
+	`, id, queueItemStatusProcessing)
 	if err != nil {
 		return fmt.Errorf("delete queue item: %w", err)
 	}
@@ -569,11 +577,30 @@ func (s *Store) MarkQueueItemCompleted(ctx context.Context, id int64, summary st
 
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE queue_items
-		SET status = 'completed', completed_at_ms = ?, last_error = '', result_summary = ?, result_payload = ?,
+		SET status = ?, completed_at_ms = ?, last_error = '', result_summary = ?, result_payload = ?,
 		    used_llm = ?, used_vision_llm = ?, processing_duration_ms = ?
 		WHERE id = ?
-	`, completedAtMS, summary, resultPayload, usedLLM, usedVisionLLM, duration, id); err != nil {
+	`, queueItemStatusCompleted, completedAtMS, summary, resultPayload, usedLLM, usedVisionLLM, duration, id); err != nil {
 		return nil, fmt.Errorf("mark queue item completed: %w", err)
+	}
+
+	return s.GetQueueItem(ctx, id)
+}
+
+func (s *Store) MarkQueueItemPartiallyCompleted(ctx context.Context, id int64, summary string, lastError string, resultPayload string, usedLLM string, usedVisionLLM string, startedAtMS *int64) (*QueueItem, error) {
+	completedAtMS := nowMS()
+	var duration any
+	if startedAtMS != nil && *startedAtMS > 0 {
+		duration = completedAtMS - *startedAtMS
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE queue_items
+		SET status = ?, completed_at_ms = ?, last_error = ?, result_summary = ?, result_payload = ?,
+		    used_llm = ?, used_vision_llm = ?, processing_duration_ms = ?
+		WHERE id = ?
+	`, queueItemStatusPartiallyCompleted, completedAtMS, lastError, summary, resultPayload, usedLLM, usedVisionLLM, duration, id); err != nil {
+		return nil, fmt.Errorf("mark queue item partially completed: %w", err)
 	}
 
 	return s.GetQueueItem(ctx, id)
@@ -583,8 +610,8 @@ func (s *Store) UpdateQueueItemProgress(ctx context.Context, id int64, summary s
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE queue_items
 		SET result_summary = ?, result_payload = ?, used_llm = ?, used_vision_llm = ?, last_error = '', completed_at_ms = NULL, processing_duration_ms = NULL
-		WHERE id = ? AND status = 'processing'
-	`, summary, resultPayload, usedLLM, usedVisionLLM, id); err != nil {
+		WHERE id = ? AND status = ?
+	`, summary, resultPayload, usedLLM, usedVisionLLM, id, queueItemStatusProcessing); err != nil {
 		return nil, fmt.Errorf("update queue item progress: %w", err)
 	}
 
@@ -600,10 +627,10 @@ func (s *Store) MarkQueueItemFailed(ctx context.Context, id int64, lastError str
 
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE queue_items
-		SET status = 'failed', completed_at_ms = ?, last_error = ?, result_payload = ?,
+		SET status = ?, completed_at_ms = ?, last_error = ?, result_payload = ?,
 		    used_llm = ?, used_vision_llm = ?, processing_duration_ms = ?
 		WHERE id = ?
-	`, completedAtMS, lastError, resultPayload, usedLLM, usedVisionLLM, duration, id); err != nil {
+	`, queueItemStatusFailed, completedAtMS, lastError, resultPayload, usedLLM, usedVisionLLM, duration, id); err != nil {
 		return nil, fmt.Errorf("mark queue item failed: %w", err)
 	}
 
@@ -616,24 +643,28 @@ func (s *Store) BuildDashboardStats(ctx context.Context, limit int) (DashboardSt
 	}
 
 	stats := DashboardStats{}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM queue_items WHERE status IN ('pending', 'processing')`).Scan(&stats.QueuedCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM queue_items WHERE status IN (?, ?)`, queueItemStatusPending, queueItemStatusProcessing).Scan(&stats.QueuedCount); err != nil {
 		return DashboardStats{}, fmt.Errorf("count queued items: %w", err)
 	}
 
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(AVG(processing_duration_ms), 0) FROM queue_items WHERE status = 'completed'`).Scan(&stats.AverageProcessingMS); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(AVG(processing_duration_ms), 0) FROM queue_items WHERE status IN (?, ?)`, queueItemStatusCompleted, queueItemStatusPartiallyCompleted).Scan(&stats.AverageProcessingMS); err != nil {
 		return DashboardStats{}, fmt.Errorf("calculate average processing time: %w", err)
 	}
 
 	var completedCount int64
+	var partiallyCompletedCount int64
 	var failedCount int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM queue_items WHERE status = 'completed'`).Scan(&completedCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM queue_items WHERE status = ?`, queueItemStatusCompleted).Scan(&completedCount); err != nil {
 		return DashboardStats{}, fmt.Errorf("count completed items: %w", err)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM queue_items WHERE status = 'failed'`).Scan(&failedCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM queue_items WHERE status = ?`, queueItemStatusPartiallyCompleted).Scan(&partiallyCompletedCount); err != nil {
+		return DashboardStats{}, fmt.Errorf("count partially completed items: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM queue_items WHERE status = ?`, queueItemStatusFailed).Scan(&failedCount); err != nil {
 		return DashboardStats{}, fmt.Errorf("count failed items: %w", err)
 	}
 
-	totalProcessed := completedCount + failedCount
+	totalProcessed := completedCount + partiallyCompletedCount + failedCount
 	if totalProcessed > 0 {
 		stats.ProcessingSuccessRate = float64(completedCount) / float64(totalProcessed)
 	}

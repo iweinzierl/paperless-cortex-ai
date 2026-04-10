@@ -279,7 +279,7 @@ func (s *Server) handleProcessQueueItem(c *gin.Context) {
 		return
 	}
 	if errors.Is(err, errQueueItemNotRetryable) {
-		c.JSON(http.StatusConflict, gin.H{"error": "queue item cannot be retriggered unless it is pending or failed"})
+		c.JSON(http.StatusConflict, gin.H{"error": "queue item cannot be retriggered unless it is pending, failed, or partially completed"})
 		return
 	}
 	if err != nil {

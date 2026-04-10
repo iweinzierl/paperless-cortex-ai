@@ -294,6 +294,69 @@ func TestProcessQueueItemAllowsRetryForFailedItems(t *testing.T) {
 	}
 }
 
+func TestProcessQueueItemAllowsRetryForPartiallyCompletedItems(t *testing.T) {
+	router, store := newWebhookTestRouter(t, "secret")
+
+	if err := store.CreateSession(t.Context(), Session{
+		Token:        "session-token",
+		Username:     "tester",
+		CreatedAtMS:  nowMS(),
+		ExpiresAtMS:  nowMS() + 60_000,
+		LastSeenAtMS: nowMS(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Retry me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+	startedAt := nowMS()
+	partialItem, err := store.MarkQueueItemPartiallyCompleted(
+		t.Context(),
+		item.ID,
+		"Completed document type suggestion.",
+		"invalid llm output",
+		`{"failure":true}`,
+		"llama3.2",
+		"llava",
+		&startedAt,
+	)
+	if err != nil {
+		t.Fatalf("mark queue item partially completed: %v", err)
+	}
+
+	response := performWebhookRequest(
+		t,
+		router,
+		http.MethodPost,
+		fmt.Sprintf("/api/queue/%d/process", item.ID),
+		nil,
+		map[string]string{"Authorization": "Bearer session-token"},
+	)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var responseItem QueueItem
+	if err := json.Unmarshal(response.Body.Bytes(), &responseItem); err != nil {
+		t.Fatalf("decode process response: %v", err)
+	}
+	if responseItem.Status != queueItemStatusProcessing {
+		t.Fatalf("expected response item status processing, got %q", responseItem.Status)
+	}
+	if responseItem.Attempts != partialItem.Attempts+1 {
+		t.Fatalf(
+			"expected attempts to increment from %d to %d after retry, got %d",
+			partialItem.Attempts,
+			partialItem.Attempts+1,
+			responseItem.Attempts,
+		)
+	}
+}
+
 func TestDeleteQueueItemRemovesPendingItems(t *testing.T) {
 	router, store := newWebhookTestRouter(t, "secret")
 

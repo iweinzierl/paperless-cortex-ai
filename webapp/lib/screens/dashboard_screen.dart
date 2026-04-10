@@ -433,6 +433,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       case 'completed':
         statusColor = TailwindColors.tertiary;
         break;
+      case 'partially_completed':
+        statusColor = TailwindColors.secondary;
+        break;
       case 'failed':
         statusColor = TailwindColors.error;
         break;
