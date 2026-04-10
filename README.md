@@ -20,6 +20,8 @@ The target uses Docker Buildx, builds for `linux/amd64` and `linux/arm64` by def
 
 The container exposes port `8080` and stores its SQLite database at `/data/paperless-aiext.db`, so for k3s you should mount `/data` on persistent storage.
 
+The backend needs `pdftoppm` for PDF-based vision OCR. The provided backend container image installs `poppler-utils`, which supplies `pdftoppm`, so forced vision extraction and vision fallback work for PDF documents out of the box. If you run the backend outside the container, install either `pdftoppm` or another supported renderer on the host.
+
 You can build and push the webapp container image with:
 
 ```sh

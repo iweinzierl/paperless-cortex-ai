@@ -20,7 +20,11 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
 	-o /out/paperless-ai-ext-backend \
 	./backend
 
-FROM --platform=$TARGETPLATFORM gcr.io/distroless/base-debian12
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ca-certificates poppler-utils \
+	&& rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

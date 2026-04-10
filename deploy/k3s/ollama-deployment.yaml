@@ -50,7 +50,9 @@ spec:
           #limits:
           #  nvidia.com/gpu: 1 # Reserviert die GPU für KI-Berechnungen
           requests:
-            memory: "36Gi"
+            memory: "4Gi"
+            cpu: "2"
+          limits:
             cpu: "10"
         volumeMounts:
         - name: model-storage
