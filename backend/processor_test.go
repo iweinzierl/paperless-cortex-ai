@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -459,6 +460,118 @@ func TestProcessorContinuesAfterSuggestionStageFailure(t *testing.T) {
 	}
 	if result.Extraction.Status != stageStatusCompleted {
 		t.Fatalf("expected extraction stage completed, got %+v", result.Extraction)
+	}
+}
+
+func TestProcessorFallsBackToVisionWhenDownloadLacksFilename(t *testing.T) {
+	ollamaRequests := 0
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		ollamaRequests++
+		if ollamaRequests == 1 {
+			http.Error(w, "ocr model failure", http.StatusInternalServerError)
+			return
+		}
+		if ollamaRequests == 2 {
+			if !bytes.Contains(body, []byte(`"model":"llava"`)) {
+				t.Fatalf("expected fallback to vision model on second request, got %s", string(body))
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"Vision extracted text from fallback path"}}`))
+			return
+		}
+		if !bytes.Contains(body, []byte(`"model":"llama3.2"`)) {
+			t.Fatalf("expected document type request to use default model, got %s", string(body))
+		}
+		if !bytes.Contains(body, []byte(`Vision extracted text from fallback path`)) {
+			t.Fatalf("expected document type stage to receive fallback text, got %s", string(body))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"document_type_id\":7,\"document_type_name\":\"Invoice\",\"suggested_new_document_type\":null,\"confidence\":\"high\",\"reasoning\":\"Passt zum Rechnungsinhalt.\"}"}}`))
+	}))
+	defer ollamaServer.Close()
+
+	pngBytes := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c,
+		0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0xda, 0x63, 0xfc, 0xff, 0x1f, 0x00,
+		0x03, 0x03, 0x01, 0xff, 0xa5, 0xfe, 0xff, 0x9f,
+		0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+		0xae, 0x42, 0x60, 0x82,
+	}
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"document-type"}],"next":null}`))
+		case r.URL.Path == "/api/document_types/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":7,"name":"Invoice"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Scanned Invoice","original_file_name":"scan.pdf","tags":[1,2]}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(pngBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:      "process",
+			ProcessDocumentTypeTag: "document-type",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	documentID := int64(42)
+	if _, err := store.CreateQueueItem(t.Context(), &documentID, "Scanned Invoice", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	item, err := processor.ProcessNext(t.Context())
+	if err != nil {
+		t.Fatalf("process next queue item: %v", err)
+	}
+	if item.Status != "completed" {
+		t.Fatalf("expected completed status, got %q", item.Status)
+	}
+	if ollamaRequests != 3 {
+		t.Fatalf("expected 3 ollama requests (failed OCR, vision fallback, document type), got %d", ollamaRequests)
+	}
+
+	var result ProcessingResult
+	if err := json.Unmarshal([]byte(item.ResultPayload), &result); err != nil {
+		t.Fatalf("decode result payload: %v", err)
+	}
+	if result.Extraction.Status != stageStatusCompleted || result.Extraction.Source != "vision-llm" {
+		t.Fatalf("expected vision fallback extraction, got %+v", result.Extraction)
+	}
+	if result.Extraction.UsedModel != "llava" {
+		t.Fatalf("expected vision model llava, got %+v", result.Extraction)
+	}
+	if result.DocumentType.Status != stageStatusCompleted {
+		t.Fatalf("expected document type stage completed, got %+v", result.DocumentType)
 	}
 }
 

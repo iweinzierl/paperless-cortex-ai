@@ -145,9 +145,7 @@ func (client *Client) DownloadDocument(ctx context.Context, documentID int64, de
 	}
 
 	fileName := downloadFileName(resp)
-	if fileName == "" {
-		fileName = fmt.Sprintf("document-%d.bin", documentID)
-	}
+	fileName = normalizeDownloadFileName(fileName, strings.TrimSpace(resp.Header.Get("Content-Type")), documentID)
 
 	if err := os.MkdirAll(destinationDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create download directory: %w", err)
@@ -378,6 +376,48 @@ func downloadFileName(resp *http.Response) string {
 	}
 
 	return ""
+}
+
+func normalizeDownloadFileName(fileName string, contentType string, documentID int64) string {
+	trimmedName := filepath.Base(strings.TrimSpace(fileName))
+	inferredExtension := inferredFileExtension(contentType)
+	if trimmedName == "" || trimmedName == "." || trimmedName == string(filepath.Separator) {
+		if inferredExtension == "" {
+			inferredExtension = ".bin"
+		}
+		return fmt.Sprintf("document-%d%s", documentID, inferredExtension)
+	}
+
+	if filepath.Ext(trimmedName) == "" && inferredExtension != "" {
+		return trimmedName + inferredExtension
+	}
+
+	return trimmedName
+}
+
+func inferredFileExtension(contentType string) string {
+	mediaType := strings.ToLower(strings.TrimSpace(contentType))
+	if mediaType == "" {
+		return ""
+	}
+	if parsedMediaType, _, err := mime.ParseMediaType(mediaType); err == nil {
+		mediaType = parsedMediaType
+	}
+
+	switch mediaType {
+	case "application/pdf":
+		return ".pdf"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "text/plain":
+		return ".txt"
+	default:
+		return ""
+	}
 }
 
 func minPositive(left int, right int) int {

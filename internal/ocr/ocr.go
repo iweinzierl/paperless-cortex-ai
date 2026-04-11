@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"paperless-ai-ext/internal/ollama"
 
@@ -33,6 +36,14 @@ var imageExtensions = map[string]struct{}{
 	".webp": {},
 }
 
+type documentKind string
+
+const (
+	documentKindUnknown documentKind = "unknown"
+	documentKindPDF     documentKind = "pdf"
+	documentKindImage   documentKind = "image"
+)
+
 func BuildScreeningMessage(documentPath string, prompt string) (ollama.Message, error) {
 	info, err := os.Stat(documentPath)
 	if err != nil {
@@ -43,19 +54,25 @@ func BuildScreeningMessage(documentPath string, prompt string) (ollama.Message, 
 		return ollama.Message{}, fmt.Errorf("document path %q is a directory", documentPath)
 	}
 
-	ext := strings.ToLower(filepath.Ext(documentPath))
+	kind, err := detectDocumentKind(documentPath)
+	if err != nil {
+		return ollama.Message{}, err
+	}
 	switch {
-	case ext == ".pdf":
+	case kind == documentKindPDF:
 		text, err := extractPDFText(documentPath)
 		if err != nil {
 			return ollama.Message{}, err
+		}
+		if !embeddedPDFTextLooksUsable(text) {
+			return ollama.Message{}, errors.New("PDF embedded text quality is too low")
 		}
 
 		return ollama.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("%s\n\nDocument source: %s\n\nDocument text:\n%s", prompt, filepath.Base(documentPath), text),
 		}, nil
-	case isImageExtension(ext):
+	case kind == documentKindImage:
 		encoded, err := encodeImage(documentPath)
 		if err != nil {
 			return ollama.Message{}, err
@@ -89,9 +106,12 @@ func BuildVisionScreeningMessage(documentPath string, prompt string, maxPages in
 		return ollama.Message{}, fmt.Errorf("document path %q is a directory", documentPath)
 	}
 
-	ext := strings.ToLower(filepath.Ext(documentPath))
+	kind, err := detectDocumentKind(documentPath)
+	if err != nil {
+		return ollama.Message{}, err
+	}
 	switch {
-	case isImageExtension(ext):
+	case kind == documentKindImage:
 		encoded, err := encodeImage(documentPath)
 		if err != nil {
 			return ollama.Message{}, err
@@ -102,7 +122,7 @@ func BuildVisionScreeningMessage(documentPath string, prompt string, maxPages in
 			Content: fmt.Sprintf("%s\n\nDocument source: %s", prompt, filepath.Base(documentPath)),
 			Images:  []string{encoded},
 		}, nil
-	case ext == ".pdf":
+	case kind == documentKindPDF:
 		images, err := renderPDFAsImages(documentPath, maxPages)
 		if err != nil {
 			return ollama.Message{}, err
@@ -114,7 +134,7 @@ func BuildVisionScreeningMessage(documentPath string, prompt string, maxPages in
 			Images:  images,
 		}, nil
 	default:
-		return ollama.Message{}, fmt.Errorf("vision OCR supports PDF and image files only, got %q", ext)
+		return ollama.Message{}, fmt.Errorf("vision OCR supports PDF and image files only, got %q", strings.ToLower(filepath.Ext(documentPath)))
 	}
 }
 
@@ -187,6 +207,121 @@ func encodeImage(documentPath string) (string, error) {
 func isImageExtension(ext string) bool {
 	_, ok := imageExtensions[ext]
 	return ok
+}
+
+func detectDocumentKind(documentPath string) (documentKind, error) {
+	ext := strings.ToLower(filepath.Ext(documentPath))
+	switch {
+	case ext == ".pdf":
+		return documentKindPDF, nil
+	case isImageExtension(ext):
+		return documentKindImage, nil
+	}
+
+	file, err := os.Open(documentPath)
+	if err != nil {
+		return documentKindUnknown, fmt.Errorf("open document for type detection: %w", err)
+	}
+	defer file.Close()
+
+	buffer := make([]byte, 512)
+	bytesRead, err := file.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return documentKindUnknown, fmt.Errorf("read document for type detection: %w", err)
+	}
+	buffer = buffer[:bytesRead]
+	if len(buffer) == 0 {
+		return documentKindUnknown, nil
+	}
+
+	if bytes.HasPrefix(buffer, []byte("%PDF-")) {
+		return documentKindPDF, nil
+	}
+
+	mediaType := strings.ToLower(http.DetectContentType(buffer))
+	switch mediaType {
+	case "application/pdf":
+		return documentKindPDF, nil
+	case "image/jpeg", "image/png", "image/webp":
+		return documentKindImage, nil
+	default:
+		return documentKindUnknown, nil
+	}
+}
+
+func embeddedPDFTextLooksUsable(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	if !utf8.ValidString(trimmed) {
+		return false
+	}
+
+	for _, candidate := range trimmed {
+		if unicode.IsControl(candidate) && !isAllowedEmbeddedTextControl(candidate) {
+			return false
+		}
+	}
+
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return false
+	}
+
+	tokenCount := 0
+	shortTokenCount := 0
+	longTokenCount := 0
+	totalTokenLength := 0
+
+	for _, field := range fields {
+		cleaned := strings.TrimFunc(field, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})
+		if cleaned == "" {
+			continue
+		}
+
+		tokenLength := utf8.RuneCountInString(cleaned)
+		tokenCount++
+		totalTokenLength += tokenLength
+		if tokenLength <= 2 {
+			shortTokenCount++
+		}
+		if tokenLength >= 5 {
+			longTokenCount++
+		}
+	}
+
+	if tokenCount == 0 {
+		return false
+	}
+
+	textLength := utf8.RuneCountInString(trimmed)
+	averageTokenLength := float64(totalTokenLength) / float64(tokenCount)
+	shortTokenRatio := float64(shortTokenCount) / float64(tokenCount)
+	longTokenRatio := float64(longTokenCount) / float64(tokenCount)
+
+	if textLength < 300 && longTokenCount < 12 {
+		return false
+	}
+	if averageTokenLength < 3.2 && longTokenRatio < 0.35 {
+		return false
+	}
+	if shortTokenRatio > 0.45 && longTokenRatio < 0.5 {
+		return false
+	}
+
+	return true
+}
+
+func isAllowedEmbeddedTextControl(candidate rune) bool {
+	switch candidate {
+	case '\n', '\r', '\t', '\f':
+		return true
+	default:
+		return false
+	}
 }
 
 func renderPDFAsImages(documentPath string, maxPages int) ([]string, error) {

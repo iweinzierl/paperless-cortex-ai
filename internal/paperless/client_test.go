@@ -1,8 +1,10 @@
 package paperless
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -56,5 +58,34 @@ func TestClientListDocumentsAppliesFiltersAndLimit(t *testing.T) {
 	}
 	if documents[2].ID != 3 {
 		t.Fatalf("expected third document to be id 3, got %+v", documents[2])
+	}
+}
+
+func TestClientDownloadDocumentInfersExtensionFromContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/documents/42/download/" {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = io.WriteString(w, "%PDF-1.4\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "token")
+	downloaded, err := client.DownloadDocument(t.Context(), 42, t.TempDir())
+	if err != nil {
+		t.Fatalf("download document: %v", err)
+	}
+
+	if filepath.Ext(downloaded.Path) != ".pdf" {
+		t.Fatalf("expected inferred .pdf extension, got %q", downloaded.Path)
+	}
+	if downloaded.FileName != "download.pdf" {
+		t.Fatalf("expected normalized filename download.pdf, got %q", downloaded.FileName)
+	}
+	if downloaded.ContentType != "application/pdf" {
+		t.Fatalf("expected application/pdf content type, got %q", downloaded.ContentType)
 	}
 }
