@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +21,9 @@ type Processor struct {
 	store  *Store
 	logger zerolog.Logger
 }
+
+var errQueueItemNotApplyable = errors.New("queue item is not applyable")
+var errQueueItemAlreadyApplied = errors.New("queue item suggestions were already applied")
 
 func NewProcessor(store *Store, logger zerolog.Logger) *Processor {
 	return &Processor{store: store, logger: logger}
@@ -87,6 +92,20 @@ func (p *Processor) StartProcessByID(ctx context.Context, id int64) (*QueueItem,
 	}(item)
 
 	return item, nil
+}
+
+func (p *Processor) ApplyByID(ctx context.Context, id int64) (*QueueItem, error) {
+	item, err := p.store.GetQueueItem(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := p.store.LoadConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return p.applyQueueItem(ctx, item, cfg)
 }
 
 func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, error) {
@@ -372,10 +391,198 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Str("result_summary", resultSummary).
 		Str("result_payload", truncateLogValue(result.Marshal(), 4000)).
 		Msg("processed queue item")
+	var finalItem *QueueItem
 	if len(stageFailures) > 0 {
-		return p.store.MarkQueueItemPartiallyCompleted(ctx, item.ID, resultSummary, strings.Join(stageFailures, "; "), result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel, item.StartedAtMS)
+		finalItem, err = p.store.MarkQueueItemPartiallyCompleted(ctx, item.ID, resultSummary, strings.Join(stageFailures, "; "), result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel, item.StartedAtMS)
+	} else {
+		finalItem, err = p.store.MarkQueueItemCompleted(ctx, item.ID, resultSummary, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel, item.StartedAtMS)
 	}
-	return p.store.MarkQueueItemCompleted(ctx, item.ID, resultSummary, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel, item.StartedAtMS)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Engine.ProcessingMode != ProcessingModeAuto {
+		return finalItem, nil
+	}
+
+	appliedItem, applyErr := p.applyQueueItem(ctx, finalItem, cfg)
+	if applyErr != nil {
+		logger.Error().Err(applyErr).Msg("automatic suggestion apply failed")
+		if appliedItem != nil {
+			return appliedItem, nil
+		}
+		return finalItem, nil
+	}
+	return appliedItem, nil
+}
+
+func (p *Processor) applyQueueItem(ctx context.Context, item *QueueItem, cfg BackendConfig) (*QueueItem, error) {
+	logger := p.queueItemLogger(item)
+	if item == nil {
+		return nil, errQueueItemNotFound
+	}
+	if item.ApplyStatus == "applied" {
+		return nil, errQueueItemAlreadyApplied
+	}
+	if item.Status != queueItemStatusCompleted && item.Status != queueItemStatusPartiallyCompleted {
+		return nil, errQueueItemNotApplyable
+	}
+	if item.DocumentID == nil || strings.TrimSpace(item.ResultPayload) == "" {
+		return nil, errQueueItemNotApplyable
+	}
+
+	var result ProcessingResult
+	if err := json.Unmarshal([]byte(item.ResultPayload), &result); err != nil {
+		failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, fmt.Sprintf("decode processing result: %v", err))
+		if markErr != nil {
+			return nil, markErr
+		}
+		return failedItem, fmt.Errorf("decode processing result: %w", err)
+	}
+
+	if !hasCompletedSuggestion(result) && strings.TrimSpace(cfg.Process.ProcessCompletedTag) == "" {
+		return nil, errQueueItemNotApplyable
+	}
+	if cfg.Paperless.PaperlessURL == "" || cfg.Paperless.PaperlessToken == "" {
+		failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, "paperless configuration is incomplete")
+		if markErr != nil {
+			return nil, markErr
+		}
+		return failedItem, errors.New("paperless configuration is incomplete")
+	}
+
+	client := paperless.NewClient(cfg.Paperless.PaperlessURL, cfg.Paperless.PaperlessToken)
+	liveDocument, err := client.GetDocument(ctx, *item.DocumentID)
+	if err != nil {
+		applyErr := fmt.Errorf("load paperless document: %w", err)
+		failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+		if markErr != nil {
+			return nil, markErr
+		}
+		return failedItem, applyErr
+	}
+
+	tags, err := client.ListTags(ctx)
+	if err != nil {
+		applyErr := fmt.Errorf("list paperless tags: %w", err)
+		failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+		if markErr != nil {
+			return nil, markErr
+		}
+		return failedItem, applyErr
+	}
+
+	patch := paperless.DocumentPatch{}
+	appliedParts := make([]string, 0, 4)
+
+	if result.Correspondent.Status == stageStatusCompleted {
+		correspondents, err := client.ListCorrespondents(ctx)
+		if err != nil {
+			applyErr := fmt.Errorf("list correspondents: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+
+		targetID, resolved, err := resolveAppliedCorrespondent(ctx, client, correspondents, result.Correspondent)
+		if err != nil {
+			applyErr := fmt.Errorf("resolve correspondent suggestion: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+		if targetID != nil && !sameOptionalInt64(liveDocument.CorrespondentID, targetID) {
+			patch.CorrespondentID = targetID
+			appliedParts = append(appliedParts, fmt.Sprintf("correspondent %q", resolved))
+		}
+	}
+
+	if result.DocumentType.Status == stageStatusCompleted {
+		documentTypes, err := client.ListDocumentTypes(ctx)
+		if err != nil {
+			applyErr := fmt.Errorf("list document types: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+
+		targetID, resolved, err := resolveAppliedDocumentType(ctx, client, documentTypes, result.DocumentType)
+		if err != nil {
+			applyErr := fmt.Errorf("resolve document type suggestion: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+		if targetID != nil && !sameOptionalInt64(liveDocument.DocumentTypeID, targetID) {
+			patch.DocumentTypeID = targetID
+			appliedParts = append(appliedParts, fmt.Sprintf("document type %q", resolved))
+		}
+	}
+
+	finalTagIDs := append([]int64(nil), liveDocument.TagIDs...)
+	if result.Tags.Status == stageStatusCompleted {
+		resolvedTagIDs, err := resolveAppliedTags(ctx, client, &tags, result.Tags)
+		if err != nil {
+			applyErr := fmt.Errorf("resolve tag suggestion: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+		finalTagIDs = mergeInt64Lists(finalTagIDs, resolvedTagIDs)
+		if len(resolvedTagIDs) > 0 {
+			appliedParts = append(appliedParts, "tags")
+		}
+	}
+	if completedTag := strings.TrimSpace(cfg.Process.ProcessCompletedTag); completedTag != "" {
+		completedTagID, err := resolveOrCreateTag(ctx, client, &tags, completedTag)
+		if err != nil {
+			applyErr := fmt.Errorf("resolve completed tag: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+		finalTagIDs = mergeInt64Lists(finalTagIDs, []int64{completedTagID})
+		appliedParts = append(appliedParts, fmt.Sprintf("completed tag %q", completedTag))
+	}
+	finalTagIDs = removeStateTagIDs(finalTagIDs, tags, cfg.Process)
+	if !sameInt64Set(liveDocument.TagIDs, finalTagIDs) {
+		patch.TagIDs = finalTagIDs
+	}
+
+	if patch.CorrespondentID == nil && patch.DocumentTypeID == nil && len(patch.TagIDs) == 0 {
+		summary := "Suggestions already matched the live Paperless document."
+		if len(appliedParts) > 0 {
+			summary = "Apply confirmed live Paperless metadata is already up to date."
+		}
+		return p.store.MarkQueueItemApplied(ctx, item.ID, summary)
+	}
+
+	if _, err := client.PatchDocument(ctx, *item.DocumentID, patch); err != nil {
+		applyErr := fmt.Errorf("patch paperless document: %w", err)
+		failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+		if markErr != nil {
+			return nil, markErr
+		}
+		return failedItem, applyErr
+	}
+
+	summary := "Applied processing suggestions to the Paperless document."
+	if len(appliedParts) > 0 {
+		summary = "Applied " + strings.Join(appliedParts, ", ") + " to the Paperless document."
+	}
+	logger.Info().Str("applied_summary", summary).Msg("applied processing suggestions to paperless")
+	return p.store.MarkQueueItemApplied(ctx, item.ID, summary)
 }
 
 func (p *Processor) queueItemLogger(item *QueueItem) zerolog.Logger {
@@ -427,6 +634,194 @@ func truncateLogValue(value string, maxLen int) string {
 		return trimmed[:maxLen]
 	}
 	return trimmed[:maxLen-3] + "..."
+}
+
+func hasCompletedSuggestion(result ProcessingResult) bool {
+	return result.Correspondent.Status == stageStatusCompleted ||
+		result.DocumentType.Status == stageStatusCompleted ||
+		result.Tags.Status == stageStatusCompleted
+}
+
+func resolveAppliedCorrespondent(ctx context.Context, client *paperless.Client, correspondents []paperless.Correspondent, stage SuggestionStageResult) (*int64, string, error) {
+	var suggestion classification.CorrespondentSuggestion
+	if err := decodeSuggestionPayload(stage.Payload, &suggestion); err != nil {
+		return nil, "", err
+	}
+	if suggestion.CorrespondentID != nil && suggestion.CorrespondentName != nil {
+		return suggestion.CorrespondentID, strings.TrimSpace(*suggestion.CorrespondentName), nil
+	}
+	name := pointerString(suggestion.SuggestedNewCorrespondent)
+	if name == "" {
+		return nil, "", errors.New("correspondent suggestion did not contain an applyable value")
+	}
+	trimmed := strings.TrimSpace(name)
+	for _, candidate := range correspondents {
+		if strings.EqualFold(strings.TrimSpace(candidate.Name), trimmed) {
+			return int64Pointer(candidate.ID), candidate.Name, nil
+		}
+	}
+	created, err := client.CreateCorrespondent(ctx, trimmed)
+	if err != nil {
+		return nil, "", err
+	}
+	return int64Pointer(created.ID), created.Name, nil
+}
+
+func resolveAppliedDocumentType(ctx context.Context, client *paperless.Client, documentTypes []paperless.DocumentType, stage SuggestionStageResult) (*int64, string, error) {
+	var suggestion classification.DocumentTypeSuggestion
+	if err := decodeSuggestionPayload(stage.Payload, &suggestion); err != nil {
+		return nil, "", err
+	}
+	if suggestion.DocumentTypeID != nil && suggestion.DocumentTypeName != nil {
+		return suggestion.DocumentTypeID, strings.TrimSpace(*suggestion.DocumentTypeName), nil
+	}
+	name := pointerString(suggestion.SuggestedNewDocumentType)
+	if name == "" {
+		return nil, "", errors.New("document type suggestion did not contain an applyable value")
+	}
+	trimmed := strings.TrimSpace(name)
+	for _, candidate := range documentTypes {
+		if strings.EqualFold(strings.TrimSpace(candidate.Name), trimmed) {
+			return int64Pointer(candidate.ID), candidate.Name, nil
+		}
+	}
+	created, err := client.CreateDocumentType(ctx, trimmed)
+	if err != nil {
+		return nil, "", err
+	}
+	return int64Pointer(created.ID), created.Name, nil
+}
+
+func resolveAppliedTags(ctx context.Context, client *paperless.Client, existingTags *[]paperless.Tag, stage SuggestionStageResult) ([]int64, error) {
+	var suggestion classification.TagSuggestion
+	if err := decodeSuggestionPayload(stage.Payload, &suggestion); err != nil {
+		return nil, err
+	}
+	resolved := append([]int64(nil), suggestion.TagIDs...)
+	for _, tagName := range classification.NormalizeStringList(suggestion.SuggestedNewTags) {
+		tagID, err := resolveOrCreateTag(ctx, client, existingTags, tagName)
+		if err != nil {
+			return nil, err
+		}
+		resolved = mergeInt64Lists(resolved, []int64{tagID})
+	}
+	return resolved, nil
+}
+
+func resolveOrCreateTag(ctx context.Context, client *paperless.Client, tags *[]paperless.Tag, name string) (int64, error) {
+	trimmed := strings.TrimSpace(name)
+	for _, tag := range *tags {
+		if strings.EqualFold(strings.TrimSpace(tag.Name), trimmed) {
+			return tag.ID, nil
+		}
+	}
+	created, err := client.CreateTag(ctx, trimmed)
+	if err != nil {
+		return 0, err
+	}
+	*tags = append(*tags, *created)
+	return created.ID, nil
+}
+
+func decodeSuggestionPayload(payload any, target any) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal suggestion payload: %w", err)
+	}
+	if err := json.Unmarshal(encoded, target); err != nil {
+		return fmt.Errorf("decode suggestion payload: %w", err)
+	}
+	return nil
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
+}
+
+func sameOptionalInt64(left *int64, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func mergeInt64Lists(base []int64, extra []int64) []int64 {
+	seen := make(map[int64]struct{}, len(base)+len(extra))
+	merged := make([]int64, 0, len(base)+len(extra))
+	for _, value := range append(append([]int64(nil), base...), extra...) {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		merged = append(merged, value)
+	}
+	sort.Slice(merged, func(i int, j int) bool {
+		return merged[i] < merged[j]
+	})
+	return merged
+}
+
+func sameInt64Set(left []int64, right []int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftCopy := append([]int64(nil), left...)
+	rightCopy := append([]int64(nil), right...)
+	sort.Slice(leftCopy, func(i int, j int) bool { return leftCopy[i] < leftCopy[j] })
+	sort.Slice(rightCopy, func(i int, j int) bool { return rightCopy[i] < rightCopy[j] })
+	for index := range leftCopy {
+		if leftCopy[index] != rightCopy[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func removeStateTagIDs(tagIDs []int64, tags []paperless.Tag, cfg ProcessConfig) []int64 {
+	stateTagNames := processingStateTagNames(cfg)
+	if len(stateTagNames) == 0 || len(tagIDs) == 0 {
+		return tagIDs
+	}
+
+	stateTagIDs := make(map[int64]struct{}, len(tags))
+	for _, tag := range tags {
+		if _, ok := stateTagNames[strings.ToLower(strings.TrimSpace(tag.Name))]; ok {
+			stateTagIDs[tag.ID] = struct{}{}
+		}
+	}
+	if len(stateTagIDs) == 0 {
+		return tagIDs
+	}
+
+	filtered := make([]int64, 0, len(tagIDs))
+	for _, tagID := range tagIDs {
+		if _, ok := stateTagIDs[tagID]; ok {
+			continue
+		}
+		filtered = append(filtered, tagID)
+	}
+	return filtered
+}
+
+func processingStateTagNames(cfg ProcessConfig) map[string]struct{} {
+	values := []string{
+		cfg.ProcessTriggerTag,
+		cfg.ForceOCRTag,
+		cfg.ForceVisionTag,
+		cfg.ProcessCorrespondentTag,
+		cfg.ProcessDocumentTypeTag,
+		cfg.ProcessDocumentTagsTag,
+	}
+
+	stateTagNames := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		stateTagNames[trimmed] = struct{}{}
+	}
+	return stateTagNames
 }
 
 func documentNeedsModelExtraction(document *paperless.Document) bool {

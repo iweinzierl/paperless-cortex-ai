@@ -1,6 +1,7 @@
 package paperless
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -87,5 +88,87 @@ func TestClientDownloadDocumentInfersExtensionFromContentType(t *testing.T) {
 	}
 	if downloaded.ContentType != "application/pdf" {
 		t.Fatalf("expected application/pdf content type, got %q", downloaded.ContentType)
+	}
+}
+
+func TestClientCreateTagPostsJSONWithAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST request, got %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Token token" {
+			t.Fatalf("expected authorization header, got %q", got)
+		}
+
+		var payload map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if payload["name"] != "processed" {
+			t.Fatalf("expected tag name processed, got %+v", payload)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":9,"name":"processed"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "token")
+	tag, err := client.CreateTag(t.Context(), " processed ")
+	if err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	if tag.ID != 9 || tag.Name != "processed" {
+		t.Fatalf("unexpected created tag: %+v", tag)
+	}
+}
+
+func TestClientPatchDocumentSendsPatchPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/documents/42/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPatch {
+			t.Fatalf("expected PATCH request, got %s", r.Method)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if payload["correspondent"].(float64) != 7 {
+			t.Fatalf("expected correspondent 7, got %+v", payload)
+		}
+		if payload["document_type"].(float64) != 5 {
+			t.Fatalf("expected document type 5, got %+v", payload)
+		}
+		tags := payload["tags"].([]any)
+		if len(tags) != 2 || tags[0].(float64) != 3 || tags[1].(float64) != 4 {
+			t.Fatalf("expected tags [3,4], got %+v", payload)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":42,"title":"Patched","correspondent":7,"document_type":5,"tags":[3,4]}`))
+	}))
+	defer server.Close()
+
+	correspondentID := int64(7)
+	documentTypeID := int64(5)
+	client := NewClient(server.URL, "token")
+	document, err := client.PatchDocument(t.Context(), 42, DocumentPatch{
+		CorrespondentID: &correspondentID,
+		DocumentTypeID:  &documentTypeID,
+		TagIDs:          []int64{3, 4},
+	})
+	if err != nil {
+		t.Fatalf("patch document: %v", err)
+	}
+	if document.ID != 42 || document.Title != "Patched" {
+		t.Fatalf("unexpected patched document: %+v", document)
 	}
 }

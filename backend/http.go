@@ -159,6 +159,7 @@ func (s *Server) Router() *gin.Engine {
 	authenticated.GET("/queue", s.handleListQueue)
 	authenticated.DELETE("/queue/:id", s.handleDeleteQueueItem)
 	authenticated.POST("/queue/:id/process", s.handleProcessQueueItem)
+	authenticated.POST("/queue/:id/apply", s.handleApplyQueueItem)
 	authenticated.GET("/dashboard", s.handleDashboard)
 	authenticated.GET("/models", s.handleListModels)
 	authenticated.GET("/paperless/tags", s.handleListPaperlessTags)
@@ -320,6 +321,34 @@ func (s *Server) handleProcessQueueItem(c *gin.Context) {
 	}
 	if err != nil {
 		s.writeInternalError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, item)
+}
+
+func (s *Server) handleApplyQueueItem(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue item id must be numeric"})
+		return
+	}
+
+	item, err := s.processor.ApplyByID(c.Request.Context(), id)
+	if errors.Is(err, errQueueItemNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "queue item not found"})
+		return
+	}
+	if errors.Is(err, errQueueItemAlreadyApplied) {
+		c.JSON(http.StatusConflict, gin.H{"error": "queue item suggestions were already applied"})
+		return
+	}
+	if errors.Is(err, errQueueItemNotApplyable) {
+		c.JSON(http.StatusConflict, gin.H{"error": "queue item does not have applyable suggestions"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 

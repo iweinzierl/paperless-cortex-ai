@@ -23,6 +23,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Timer? _drawerCleanupTimer;
   QueueItem? _selectedResultItem;
   bool _isResultDrawerOpen = false;
+  int? _applyingItemId;
+  String _processingMode = 'manual';
+  bool _hasCompletedTag = false;
 
   @override
   void initState() {
@@ -44,10 +47,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     try {
       final api = context.read<ApiService>();
-      final stats = await api.getDashboard();
+      final responses = await Future.wait([
+        api.getDashboard(),
+        api.getConfig(),
+      ]);
+      final stats = responses[0] as DashboardStats;
+      final config = responses[1] as BackendConfig;
       if (mounted) {
         setState(() {
           _stats = stats;
+          _processingMode = config.engine.processingMode;
+          _hasCompletedTag = config.process.processCompletedTag
+              .trim()
+              .isNotEmpty;
           _selectedResultItem = _refreshSelectedItem(
             stats.recentRuns,
             _selectedResultItem,
@@ -62,6 +74,97 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _applyItem(QueueItem item) async {
+    if (_applyingItemId != null) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Apply suggestions?'),
+          content: Text(
+            'This writes the suggested metadata back to Paperless for "${item.documentTitle}" and also applies the configured completed tag.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Apply'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _applyingItemId = item.id;
+    });
+
+    try {
+      final api = context.read<ApiService>();
+      final updatedItem = await api.applyQueueItem(item.id);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        final stats = _stats;
+        if (stats != null) {
+          final updatedRuns = List<QueueItem>.from(stats.recentRuns);
+          final index = updatedRuns.indexWhere(
+            (entry) => entry.id == updatedItem.id,
+          );
+          if (index >= 0) {
+            updatedRuns[index] = updatedItem;
+            _stats = DashboardStats(
+              queuedCount: stats.queuedCount,
+              averageProcessingMs: stats.averageProcessingMs,
+              processingSuccessRate: stats.processingSuccessRate,
+              recentRuns: updatedRuns,
+            );
+          }
+        }
+        if (_selectedResultItem?.id == updatedItem.id) {
+          _selectedResultItem = updatedItem;
+        }
+        _applyingItemId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            updatedItem.appliedSummary?.trim().isNotEmpty == true
+                ? updatedItem.appliedSummary!
+                : 'Suggestions applied successfully.',
+          ),
+        ),
+      );
+      await _loadData();
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _applyingItemId = null;
+      });
+      final errorMessage = e is ApiException ? e.message : e.toString();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Apply failed: $errorMessage')));
+      await _loadData();
     }
   }
 
@@ -385,6 +488,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
             item: _selectedResultItem,
             isOpen: _isResultDrawerOpen,
             onClose: _closeResultDrawer,
+            onApply: _selectedResultItem != null
+                ? () => _applyItem(_selectedResultItem!)
+                : null,
+            isApplying:
+                _selectedResultItem != null &&
+                _applyingItemId == _selectedResultItem!.id,
+            showApplySuggestions:
+                _selectedResultItem?.canApplySuggestions(
+                  isManualMode: _processingMode == 'manual',
+                  hasCompletedTag: _hasCompletedTag,
+                ) ??
+                false,
           ),
         ),
       ],

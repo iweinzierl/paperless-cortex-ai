@@ -60,6 +60,10 @@ type QueueItem struct {
 	UsedLLM              string   `json:"used_llm,omitempty"`
 	UsedVisionLLM        string   `json:"used_vision_llm,omitempty"`
 	ProcessingDurationMS *int64   `json:"processing_duration_ms,omitempty"`
+	ApplyStatus          string   `json:"apply_status,omitempty"`
+	AppliedAtMS          *int64   `json:"applied_at_ms,omitempty"`
+	ApplyError           string   `json:"apply_error,omitempty"`
+	AppliedSummary       string   `json:"applied_summary,omitempty"`
 }
 
 type DashboardStats struct {
@@ -161,6 +165,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureQueueItemColumn(ctx, "requested_stages", `ALTER TABLE queue_items ADD COLUMN requested_stages TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	if err := s.ensureQueueItemColumn(ctx, "apply_status", `ALTER TABLE queue_items ADD COLUMN apply_status TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureQueueItemColumn(ctx, "applied_at_ms", `ALTER TABLE queue_items ADD COLUMN applied_at_ms INTEGER`); err != nil {
+		return err
+	}
+	if err := s.ensureQueueItemColumn(ctx, "apply_error", `ALTER TABLE queue_items ADD COLUMN apply_error TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureQueueItemColumn(ctx, "applied_summary", `ALTER TABLE queue_items ADD COLUMN applied_summary TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 
@@ -307,7 +323,8 @@ func (s *Store) FindActiveQueueItemByDocumentID(ctx context.Context, documentID 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
-		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
+		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms,
+		       apply_status, applied_at_ms, apply_error, applied_summary
 		FROM queue_items
 		WHERE document_id = ? AND status IN (?, ?)
 		ORDER BY requested_at_ms ASC
@@ -355,7 +372,8 @@ func (s *Store) GetQueueItem(ctx context.Context, id int64) (*QueueItem, error) 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
-		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
+		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms,
+		       apply_status, applied_at_ms, apply_error, applied_summary
 		FROM queue_items
 		WHERE id = ?
 	`, id)
@@ -379,7 +397,8 @@ func (s *Store) ListQueueItems(ctx context.Context, status string, limit int) ([
 	query := `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
-		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
+		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms,
+		       apply_status, applied_at_ms, apply_error, applied_summary
 		FROM queue_items
 	`
 	args := []any{}
@@ -422,7 +441,8 @@ func (s *Store) ClaimNextPendingQueueItem(ctx context.Context) (*QueueItem, erro
 	row := transaction.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
-		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
+		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms,
+		       apply_status, applied_at_ms, apply_error, applied_summary
 		FROM queue_items
 		WHERE status = ?
 		ORDER BY requested_at_ms ASC
@@ -475,7 +495,8 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 	row := transaction.QueryRowContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
-		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
+		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms,
+		       apply_status, applied_at_ms, apply_error, applied_summary
 		FROM queue_items
 		WHERE id = ?
 	`, id)
@@ -495,7 +516,8 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 	result, err := transaction.ExecContext(ctx, `
 		UPDATE queue_items
 		SET status = ?, started_at_ms = ?, completed_at_ms = NULL, attempts = attempts + 1,
-		    last_error = '', result_summary = '', result_payload = '', used_llm = '', used_vision_llm = '', processing_duration_ms = NULL
+		    last_error = '', result_summary = '', result_payload = '', used_llm = '', used_vision_llm = '', processing_duration_ms = NULL,
+		    apply_status = '', applied_at_ms = NULL, apply_error = '', applied_summary = ''
 		WHERE id = ? AND status IN (?, ?, ?)
 	`, queueItemStatusProcessing, startedAtMS, item.ID, queueItemStatusPending, queueItemStatusFailed, queueItemStatusPartiallyCompleted)
 	if err != nil {
@@ -524,7 +546,37 @@ func (s *Store) ClaimQueueItemByID(ctx context.Context, id int64) (*QueueItem, e
 	item.UsedLLM = ""
 	item.UsedVisionLLM = ""
 	item.ProcessingDurationMS = nil
+	item.ApplyStatus = ""
+	item.AppliedAtMS = nil
+	item.ApplyError = ""
+	item.AppliedSummary = ""
 	return item, nil
+}
+
+func (s *Store) MarkQueueItemApplied(ctx context.Context, id int64, summary string) (*QueueItem, error) {
+	appliedAtMS := nowMS()
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE queue_items
+		SET apply_status = ?, applied_at_ms = ?, apply_error = '', applied_summary = ?
+		WHERE id = ?
+	`, "applied", appliedAtMS, summary, id); err != nil {
+		return nil, fmt.Errorf("mark queue item applied: %w", err)
+	}
+
+	return s.GetQueueItem(ctx, id)
+}
+
+func (s *Store) MarkQueueItemApplyFailed(ctx context.Context, id int64, applyError string) (*QueueItem, error) {
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE queue_items
+		SET apply_status = ?, applied_at_ms = NULL, apply_error = ?, applied_summary = ''
+		WHERE id = ?
+	`, "failed", applyError, id); err != nil {
+		return nil, fmt.Errorf("mark queue item apply failed: %w", err)
+	}
+
+	return s.GetQueueItem(ctx, id)
 }
 
 func (s *Store) DeleteQueueItem(ctx context.Context, id int64) error {
@@ -682,7 +734,8 @@ func (s *Store) listRecentRuns(ctx context.Context, limit int) ([]QueueItem, err
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, document_id, document_title, source, trigger_source, status, payload,
 		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
-		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms
+		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms,
+		       apply_status, applied_at_ms, apply_error, applied_summary
 		FROM queue_items
 		WHERE status IN ('completed', 'failed')
 		ORDER BY completed_at_ms DESC, requested_at_ms DESC
@@ -720,6 +773,7 @@ func scanQueueItem(row scanner) (*QueueItem, error) {
 	var startedAtMS sql.NullInt64
 	var completedAtMS sql.NullInt64
 	var durationMS sql.NullInt64
+	var appliedAtMS sql.NullInt64
 
 	err := row.Scan(
 		&item.ID,
@@ -740,6 +794,10 @@ func scanQueueItem(row scanner) (*QueueItem, error) {
 		&item.UsedLLM,
 		&item.UsedVisionLLM,
 		&durationMS,
+		&item.ApplyStatus,
+		&appliedAtMS,
+		&item.ApplyError,
+		&item.AppliedSummary,
 	)
 	if err != nil {
 		return nil, err
@@ -762,6 +820,9 @@ func scanQueueItem(row scanner) (*QueueItem, error) {
 	}
 	if durationMS.Valid {
 		item.ProcessingDurationMS = &durationMS.Int64
+	}
+	if appliedAtMS.Valid {
+		item.AppliedAtMS = &appliedAtMS.Int64
 	}
 
 	return &item, nil

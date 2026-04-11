@@ -446,6 +446,11 @@ class ProcessingResultModel {
 
   bool get hasFailure => requestedStages.any((stage) => stage.isFailed);
 
+  bool get hasCompletedSuggestion =>
+      correspondent.status == 'completed' ||
+      documentType.status == 'completed' ||
+      tags.status == 'completed';
+
   ProcessingStageProgress? get activeStage {
     for (final stage in requestedStages) {
       if (stage.isRunning) {
@@ -542,6 +547,10 @@ class QueueItem {
   final String? usedLlm;
   final String? usedVisionLlm;
   final int? processingDurationMs;
+  final String applyStatus;
+  final int? appliedAtMs;
+  final String? applyError;
+  final String? appliedSummary;
 
   QueueItem({
     required this.id,
@@ -562,6 +571,10 @@ class QueueItem {
     this.usedLlm,
     this.usedVisionLlm,
     this.processingDurationMs,
+    required this.applyStatus,
+    this.appliedAtMs,
+    this.applyError,
+    this.appliedSummary,
   });
 
   factory QueueItem.fromJson(Map<String, dynamic> json) {
@@ -584,6 +597,10 @@ class QueueItem {
       usedLlm: _asString(json['used_llm']),
       usedVisionLlm: _asString(json['used_vision_llm']),
       processingDurationMs: _asInt(json['processing_duration_ms']),
+      applyStatus: _asString(json['apply_status']) ?? '',
+      appliedAtMs: _asInt(json['applied_at_ms']),
+      applyError: _asString(json['apply_error']),
+      appliedSummary: _asString(json['applied_summary']),
     );
   }
 
@@ -591,12 +608,30 @@ class QueueItem {
 
   bool get isPartiallyCompleted => status == 'partially_completed';
 
+  bool get isApplied => applyStatus == 'applied';
+
+  bool get hasApplyFailure => applyStatus == 'failed';
+
   bool get canViewResultDetails =>
       status == 'completed' ||
       status == 'failed' ||
       status == 'partially_completed';
 
   bool get canRemoveFromQueue => status != 'processing';
+
+  bool canApplySuggestions({
+    required bool isManualMode,
+    required bool hasCompletedTag,
+  }) {
+    if (!isManualMode || isApplied) {
+      return false;
+    }
+    if (status != 'completed' && status != 'partially_completed') {
+      return false;
+    }
+    return (processingResult?.hasCompletedSuggestion ?? false) ||
+        hasCompletedTag;
+  }
 
   List<ProcessingStageProgress> get requestedStages {
     if (requestedStageKeys.isNotEmpty) {
@@ -615,6 +650,10 @@ class QueueItem {
   DateTime? get completedAt => completedAtMs == null
       ? null
       : DateTime.fromMillisecondsSinceEpoch(completedAtMs!);
+
+  DateTime? get appliedAt => appliedAtMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(appliedAtMs!);
 
   String get detailSummary {
     final error = lastError?.trim();

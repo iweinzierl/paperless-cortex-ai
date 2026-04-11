@@ -500,6 +500,162 @@ func TestDeleteQueueItemRejectsProcessingItems(t *testing.T) {
 	}
 }
 
+func TestApplyQueueItemAppliesSuggestionsAndCompletedTag(t *testing.T) {
+	patched := false
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/" && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"invoice"},{"id":3,"name":"completed"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/" && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Invoice April","tags":[1]}`))
+		case r.URL.Path == "/api/documents/42/" && r.Method == http.MethodPatch:
+			patched = true
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			tags := payload["tags"].([]any)
+			if len(tags) != 2 || tags[0].(float64) != 2 || tags[1].(float64) != 3 {
+				t.Fatalf("expected final tag ids [2,3], got %+v", payload)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Invoice April","tags":[2,3]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	router, store := newWebhookTestRouter(t, "secret")
+	if err := store.CreateSession(t.Context(), Session{
+		Token:        "session-token",
+		Username:     "tester",
+		CreatedAtMS:  nowMS(),
+		ExpiresAtMS:  nowMS() + 60_000,
+		LastSeenAtMS: nowMS(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.SaveConfig(t.Context(), BackendConfig{
+		Engine:    EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process:   ProcessConfig{ProcessTriggerTag: "process", ProcessCompletedTag: "completed"},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Invoice April", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+	startedAt := nowMS()
+	completedItem, err := store.MarkQueueItemCompleted(
+		t.Context(),
+		item.ID,
+		"Completed tag suggestion.",
+		`{"document":{"id":42,"title":"Invoice April"},"tags":{"status":"completed","payload":{"tag_ids":[2],"tag_names":["invoice"],"suggested_new_tags":[],"confidence":"high","reasoning":"matched"}}}`,
+		"llama3.2",
+		"llava",
+		&startedAt,
+	)
+	if err != nil {
+		t.Fatalf("mark queue item completed: %v", err)
+	}
+	if completedItem.Status != queueItemStatusCompleted {
+		t.Fatalf("expected completed item, got %q", completedItem.Status)
+	}
+
+	response := performWebhookRequest(
+		t,
+		router,
+		http.MethodPost,
+		fmt.Sprintf("/api/queue/%d/apply", item.ID),
+		nil,
+		map[string]string{"Authorization": "Bearer session-token"},
+	)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+	if !patched {
+		t.Fatal("expected document patch request")
+	}
+
+	var responseItem QueueItem
+	if err := json.Unmarshal(response.Body.Bytes(), &responseItem); err != nil {
+		t.Fatalf("decode apply response: %v", err)
+	}
+	if responseItem.ApplyStatus != "applied" {
+		t.Fatalf("expected applied status, got %q", responseItem.ApplyStatus)
+	}
+	if responseItem.AppliedSummary == "" {
+		t.Fatal("expected applied summary in response")
+	}
+	if responseItem.AppliedAtMS == nil {
+		t.Fatal("expected applied_at_ms in response")
+	}
+
+	reloaded, err := store.GetQueueItem(t.Context(), item.ID)
+	if err != nil {
+		t.Fatalf("reload queue item: %v", err)
+	}
+	if reloaded.ApplyStatus != "applied" {
+		t.Fatalf("expected applied status persisted, got %q", reloaded.ApplyStatus)
+	}
+}
+
+func TestApplyQueueItemRejectsAlreadyAppliedItems(t *testing.T) {
+	router, store := newWebhookTestRouter(t, "secret")
+
+	if err := store.CreateSession(t.Context(), Session{
+		Token:        "session-token",
+		Username:     "tester",
+		CreatedAtMS:  nowMS(),
+		ExpiresAtMS:  nowMS() + 60_000,
+		LastSeenAtMS: nowMS(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Invoice April", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+	startedAt := nowMS()
+	completedItem, err := store.MarkQueueItemCompleted(
+		t.Context(),
+		item.ID,
+		"Completed tag suggestion.",
+		`{"tags":{"status":"completed","payload":{"tag_ids":[2]}}}`,
+		"llama3.2",
+		"llava",
+		&startedAt,
+	)
+	if err != nil {
+		t.Fatalf("mark queue item completed: %v", err)
+	}
+	if _, err := store.MarkQueueItemApplied(t.Context(), completedItem.ID, "Applied tags."); err != nil {
+		t.Fatalf("mark queue item applied: %v", err)
+	}
+
+	response := performWebhookRequest(
+		t,
+		router,
+		http.MethodPost,
+		fmt.Sprintf("/api/queue/%d/apply", item.ID),
+		nil,
+		map[string]string{"Authorization": "Bearer session-token"},
+	)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusConflict, response.Code, response.Body.String())
+	}
+}
+
 func newWebhookTestRouter(t *testing.T, sharedSecret string) (http.Handler, *Store) {
 	t.Helper()
 

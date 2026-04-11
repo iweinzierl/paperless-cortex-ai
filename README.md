@@ -7,7 +7,7 @@ This project is supposed to become an extension of paperless-ngx (https://github
 - **webapp* - a web application which interacts with the RESTful API provided by the backend. It's used by users to configure the extension.
 
 ## Backend
-Users must configure a set of tags. The backend observes document changes and queues matching documents. When a queued item is processed, the backend fetches the live document metadata and downloads the current source file from paperless-ngx. If the tag **process_trigger_tag** is still present on the live document, the backend builds a staged processing plan from the configured tags. Text extraction is always the first stage and is followed by the requested suggestion stages: **force_ocr_tag**, **force_vision_tag**, **process_correspondent_tag**, **process_document_type_tag**, **process_document_tags_tag**. The backend currently stores structured suggestions and extraction metadata in its own queue records for review; it does not patch Paperless documents yet, so **process_completed_tag** is reserved for a later approval/apply flow.
+Users must configure a set of tags. The backend observes document changes and queues matching documents. When a queued item is processed, the backend fetches the live document metadata and downloads the current source file from paperless-ngx. If the tag **process_trigger_tag** is still present on the live document, the backend builds a staged processing plan from the configured tags. Text extraction is always the first stage and is followed by the requested suggestion stages: **force_ocr_tag**, **force_vision_tag**, **process_correspondent_tag**, **process_document_type_tag**, **process_document_tags_tag**. The backend stores structured suggestions and extraction metadata in its queue records and can now write successful suggestions back to Paperless. In **manual** mode, that writeback is triggered from the webapp with an explicit **Apply Suggestions** action. In **auto** mode, the backend applies the successful suggestions automatically after processing finishes. Whenever apply succeeds, the configured **process_completed_tag** is added to the Paperless document and the configured processing state tags are removed.
 
 ### Container Build
 You can build and push a multi-architecture backend container image for deployment to k3s with:
@@ -74,7 +74,7 @@ The backend's engine must be configured by users. The configuration is structure
 - **process_correspondent_tag** - A document tag that enables the correspondent suggestion stage.
 - **process_document_type_tag** - A document tag that enables the document type suggestion stage.
 - **process_document_tags_tag** - A document tag that enables the document tag suggestion stage.
-- **process_completed_tag** - Reserved for a later writeback flow. The current implementation stores results in the backend but does not update Paperless tags.
+- **process_completed_tag** - A Paperless tag that is added when the apply step succeeds. In manual mode this happens when the user confirms **Apply Suggestions** in the webapp. In auto mode it happens automatically after processing finishes. During the same apply step, the configured processing state tags are removed from the document.
 
 #### Configuration: Paperless
 - **paperless_url** - The URL to the paperless-ngx instance.
@@ -102,7 +102,7 @@ The command line scripts are written in Golang as well and can be executed using
 - **process_tags** - this command line script accepts the path to a document which shall be screened and the LLM that shall be used for screening. It first tries a simple OCR/text extraction path and falls back to a vision LLM when no usable text can be extracted. You can also force vision-based screening explicitly. The script reads the existing tags from your paperless-ngx instance and suggests a set of matching existing tags plus optional new tags when none of the existing tags fit well. Authentication is handled via the PAPERLESS_URL and PAPERLESS_TOKEN variables.
 
 ## Webapp
-The webapp is a management interface for users to configure the backend. Users are able to manually trigger the processing of documents if manual processing mode is selected.
+The webapp is a management interface for users to configure the backend. Users are able to manually trigger the processing of documents if manual processing mode is selected. When manual mode is configured, completed processing results also expose an **Apply Suggestions** action in the result drawer so the suggested metadata can be written back to Paperless on demand.
 
 ## Architecture
 
@@ -116,7 +116,7 @@ The webapp is a management interface for users to configure the backend. Users a
 - incoming http calls are authenticated using username:password from the paperless-ngx instance in a /api/auth call which returns a paperless-ngx session token upon successful authentication. This session token is most prominently used by the webapp to authenticate further API calls.
 - the backend implements a webhook which is called by paperless-ngx once a document is updated. Since the webhook in the workflow in paperless-ngx is called before the document is saved, the request is persisted in the queue and processed later. Authentication for this webhook endpoint is done through a shared secret set as http header (x-shared-secret) which is configured via environment variable in the backend (PAPERLESS_AIEXT_SHARED_SECRET).
 - the processor executes queued documents sequentially and evaluates the live document tags at execution time, not only the original webhook payload.
-- processing results are stored as structured JSON payloads on queue items so the UI can review extraction metadata and LLM suggestions before any future writeback flow is introduced.
+- processing results are stored as structured JSON payloads on queue items so the UI can review extraction metadata and LLM suggestions before writeback, and the queue item also records whether applying those suggestions to Paperless succeeded or failed.
 
 ### Backend Webhook Interface
 - endpoint: POST /api/webhooks/paperless

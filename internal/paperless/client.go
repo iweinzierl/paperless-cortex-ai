@@ -1,6 +1,7 @@
 package paperless
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -115,6 +116,71 @@ func (client *Client) GetDocument(ctx context.Context, documentID int64) (*Docum
 		return nil, err
 	}
 
+	return &document, nil
+}
+
+func (client *Client) CreateTag(ctx context.Context, name string) (*Tag, error) {
+	var created Tag
+	if err := client.postJSON(ctx, "tags/", map[string]any{"name": strings.TrimSpace(name)}, &created); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (client *Client) CreateCorrespondent(ctx context.Context, name string) (*Correspondent, error) {
+	var created Correspondent
+	if err := client.postJSON(ctx, "correspondents/", map[string]any{"name": strings.TrimSpace(name)}, &created); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (client *Client) CreateDocumentType(ctx context.Context, name string) (*DocumentType, error) {
+	var created DocumentType
+	if err := client.postJSON(ctx, "document_types/", map[string]any{"name": strings.TrimSpace(name)}, &created); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (client *Client) PatchDocument(ctx context.Context, documentID int64, patch DocumentPatch) (*Document, error) {
+	endpoint, err := client.buildEndpointURL(fmt.Sprintf("documents/%d/", documentID))
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return nil, fmt.Errorf("marshal document patch: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build paperless patch request: %w", err)
+	}
+	client.decorateRequest(req)
+
+	resp, err := client.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("patch paperless document: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read paperless response: %w", err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, os.ErrNotExist
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("paperless API returned %s for %s: %s", resp.Status, endpoint, strings.TrimSpace(string(responseBody)))
+	}
+
+	var document Document
+	if err := json.Unmarshal(responseBody, &document); err != nil {
+		return nil, fmt.Errorf("decode paperless response: %w", err)
+	}
 	return &document, nil
 }
 
@@ -275,6 +341,45 @@ func (client *Client) getJSON(ctx context.Context, endpoint string, target any) 
 		return fmt.Errorf("paperless API returned %s for %s: %s", resp.Status, endpoint, strings.TrimSpace(string(body)))
 	}
 	if err := json.Unmarshal(body, target); err != nil {
+		return fmt.Errorf("decode paperless response: %w", err)
+	}
+	return nil
+}
+
+func (client *Client) postJSON(ctx context.Context, resourcePath string, body any, target any) error {
+	endpoint, err := client.buildEndpointURL(resourcePath)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal paperless request body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build paperless request: %w", err)
+	}
+	client.decorateRequest(req)
+
+	resp, err := client.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("call paperless API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read paperless response: %w", err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("paperless API returned %s for %s: %s", resp.Status, endpoint, strings.TrimSpace(string(responseBody)))
+	}
+	if target == nil {
+		return nil
+	}
+	if err := json.Unmarshal(responseBody, target); err != nil {
 		return fmt.Errorf("decode paperless response: %w", err)
 	}
 	return nil

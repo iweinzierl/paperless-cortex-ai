@@ -13,7 +13,10 @@ class ProcessResultDrawer extends StatelessWidget {
   final bool isOpen;
   final VoidCallback onClose;
   final VoidCallback? onRemove;
+  final VoidCallback? onApply;
   final bool isRemoving;
+  final bool isApplying;
+  final bool showApplySuggestions;
 
   const ProcessResultDrawer({
     super.key,
@@ -21,7 +24,10 @@ class ProcessResultDrawer extends StatelessWidget {
     required this.isOpen,
     required this.onClose,
     this.onRemove,
+    this.onApply,
     this.isRemoving = false,
+    this.isApplying = false,
+    this.showApplySuggestions = false,
   });
 
   @override
@@ -139,7 +145,10 @@ class ProcessResultDrawer extends StatelessWidget {
                         item: item!,
                         onClose: onClose,
                         onRemove: onRemove,
+                        onApply: onApply,
                         isRemoving: isRemoving,
+                        isApplying: isApplying,
+                        showApplySuggestions: showApplySuggestions,
                       ),
                     ],
                   ),
@@ -157,13 +166,19 @@ class _DrawerBody extends StatelessWidget {
   final QueueItem item;
   final VoidCallback onClose;
   final VoidCallback? onRemove;
+  final VoidCallback? onApply;
   final bool isRemoving;
+  final bool isApplying;
+  final bool showApplySuggestions;
 
   const _DrawerBody({
     required this.item,
     required this.onClose,
     this.onRemove,
+    this.onApply,
     required this.isRemoving,
+    required this.isApplying,
+    required this.showApplySuggestions,
   });
 
   @override
@@ -212,6 +227,29 @@ class _DrawerBody extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (showApplySuggestions && onApply != null) ...[
+                    FilledButton.icon(
+                      onPressed: isApplying ? null : onApply,
+                      icon: isApplying
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: TailwindColors.onPrimary,
+                              ),
+                            )
+                          : const Icon(Icons.publish_outlined, size: 18),
+                      label: Text(
+                        isApplying ? 'Applying...' : 'Apply Suggestions',
+                      ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: TailwindColors.primary,
+                        foregroundColor: TailwindColors.onPrimary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   if (onRemove != null && item.canRemoveFromQueue)
                     IconButton(
                       onPressed: isRemoving ? null : onRemove,
@@ -441,6 +479,41 @@ class _DrawerBody extends StatelessWidget {
                 height: 1.4,
                 color: TailwindColors.onSurfaceVariant,
               ),
+            ),
+          ],
+          if (item.isApplied &&
+              (item.appliedSummary?.trim().isNotEmpty == true ||
+                  item.appliedAt != null)) ...[
+            const SizedBox(height: 12),
+            Text(
+              item.appliedSummary?.trim().isNotEmpty == true
+                  ? item.appliedSummary!
+                  : 'Suggestions were already applied to the Paperless document.',
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: TailwindColors.tertiary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (item.appliedAt != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Applied ${_formatTimestamp(item.appliedAt!)}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: TailwindColors.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
+          if (item.hasApplyFailure &&
+              item.applyError?.trim().isNotEmpty == true) ...[
+            const SizedBox(height: 12),
+            _CalloutText(
+              text: 'Apply failed: ${item.applyError!}',
+              isError: true,
             ),
           ],
         ],

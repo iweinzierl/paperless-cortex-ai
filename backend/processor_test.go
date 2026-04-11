@@ -281,6 +281,84 @@ func TestProcessorSkipsWhenTriggerTagMissing(t *testing.T) {
 	}
 }
 
+func TestProcessorAutoModeAppliesSuggestionsAfterProcessing(t *testing.T) {
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"tag_ids\":[2],\"tag_names\":[\"invoice\"],\"suggested_new_tags\":[],\"confidence\":\"high\",\"reasoning\":\"Matches invoice wording\"}"}}`))
+	}))
+	defer ollamaServer.Close()
+
+	patched := false
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/" && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"invoice"},{"id":3,"name":"completed"},{"id":4,"name":"document-tags"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/" && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"April Invoice","original_file_name":"invoice.txt","tags":[1,4]}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="invoice.txt"`)
+			_, _ = w.Write([]byte("Invoice text from processor test"))
+		case r.URL.Path == "/api/documents/42/" && r.Method == http.MethodPatch:
+			patched = true
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			tags := payload["tags"].([]any)
+			if len(tags) != 2 || tags[0].(float64) != 2 || tags[1].(float64) != 3 {
+				t.Fatalf("expected final tag ids [2,3], got %+v", payload)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"April Invoice","tags":[2,3]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeAuto, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:      "process",
+			ProcessDocumentTagsTag: "document-tags",
+			ProcessCompletedTag:    "completed",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	documentID := int64(42)
+	if _, err := store.CreateQueueItem(t.Context(), &documentID, "April Invoice", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	item, err := processor.ProcessNext(t.Context())
+	if err != nil {
+		t.Fatalf("process next queue item: %v", err)
+	}
+	if item.Status != queueItemStatusCompleted {
+		t.Fatalf("expected completed status, got %q", item.Status)
+	}
+	if item.ApplyStatus != "applied" {
+		t.Fatalf("expected apply status applied, got %q", item.ApplyStatus)
+	}
+	if item.AppliedSummary == "" {
+		t.Fatal("expected applied summary on auto-applied item")
+	}
+	if !patched {
+		t.Fatal("expected paperless patch request in auto mode")
+	}
+}
+
 func TestProcessorUsesHistoricalDocumentsForCorrespondentSuggestion(t *testing.T) {
 	ollamaRequests := 0
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

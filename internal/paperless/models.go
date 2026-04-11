@@ -65,6 +65,12 @@ type Document struct {
 	DocumentTypeName  string          `json:"-"`
 }
 
+type DocumentPatch struct {
+	CorrespondentID *int64  `json:"correspondent,omitempty"`
+	DocumentTypeID  *int64  `json:"document_type,omitempty"`
+	TagIDs          []int64 `json:"tags,omitempty"`
+}
+
 type DownloadedFile struct {
 	Path        string
 	FileName    string

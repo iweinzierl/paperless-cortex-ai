@@ -233,6 +233,108 @@ func TestCreateQueueItemWithRequestedStagesPersists(t *testing.T) {
 	}
 }
 
+func TestMarkQueueItemAppliedPersistsMetadata(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Apply me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	startedAt := int64(1234)
+	completedItem, err := store.MarkQueueItemCompleted(
+		t.Context(),
+		item.ID,
+		"Completed tag suggestion.",
+		`{"tags":{"status":"completed"}}`,
+		"llama3.2",
+		"llava",
+		&startedAt,
+	)
+	if err != nil {
+		t.Fatalf("mark queue item completed: %v", err)
+	}
+
+	appliedItem, err := store.MarkQueueItemApplied(t.Context(), completedItem.ID, "Applied tags to Paperless document.")
+	if err != nil {
+		t.Fatalf("mark queue item applied: %v", err)
+	}
+	if appliedItem.ApplyStatus != "applied" {
+		t.Fatalf("expected applied status, got %q", appliedItem.ApplyStatus)
+	}
+	if appliedItem.AppliedAtMS == nil {
+		t.Fatal("expected applied_at_ms to be set")
+	}
+	if appliedItem.AppliedSummary != "Applied tags to Paperless document." {
+		t.Fatalf("unexpected applied summary: %q", appliedItem.AppliedSummary)
+	}
+	if appliedItem.ApplyError != "" {
+		t.Fatalf("expected empty apply error, got %q", appliedItem.ApplyError)
+	}
+}
+
+func TestClaimQueueItemByIDClearsApplyState(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	documentID := int64(42)
+	item, err := store.CreateQueueItem(t.Context(), &documentID, "Retry me", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	startedAt := int64(1234)
+	completedItem, err := store.MarkQueueItemPartiallyCompleted(
+		t.Context(),
+		item.ID,
+		"Completed tag suggestion.",
+		"tag writeback pending",
+		`{"tags":{"status":"completed"}}`,
+		"llama3.2",
+		"llava",
+		&startedAt,
+	)
+	if err != nil {
+		t.Fatalf("mark queue item partially completed: %v", err)
+	}
+	if _, err := store.MarkQueueItemApplyFailed(t.Context(), completedItem.ID, "paperless unavailable"); err != nil {
+		t.Fatalf("mark queue item apply failed: %v", err)
+	}
+
+	retriedItem, err := store.ClaimQueueItemByID(t.Context(), item.ID)
+	if err != nil {
+		t.Fatalf("claim queue item by id: %v", err)
+	}
+	if retriedItem.ApplyStatus != "" {
+		t.Fatalf("expected apply status cleared on retry claim, got %q", retriedItem.ApplyStatus)
+	}
+	if retriedItem.AppliedAtMS != nil {
+		t.Fatalf("expected applied_at_ms cleared on retry claim, got %+v", retriedItem.AppliedAtMS)
+	}
+	if retriedItem.ApplyError != "" {
+		t.Fatalf("expected apply error cleared on retry claim, got %q", retriedItem.ApplyError)
+	}
+	if retriedItem.AppliedSummary != "" {
+		t.Fatalf("expected applied summary cleared on retry claim, got %q", retriedItem.AppliedSummary)
+	}
+}
+
 func TestStoreDeleteQueueItemRejectsProcessingItems(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
 	store, err := OpenStore(databasePath)

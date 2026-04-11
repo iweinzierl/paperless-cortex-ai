@@ -161,6 +161,15 @@ class ApiService {
     return QueueItem.fromJson(jsonDecode(response.body));
   }
 
+  Future<QueueItem> applyQueueItem(int id) async {
+    final response = await http.post(
+      Uri.parse(baseUrl + '/queue/' + id.toString() + '/apply'),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+    return QueueItem.fromJson(jsonDecode(response.body));
+  }
+
   Future<void> deleteQueueItem(int id) async {
     final response = await http.delete(
       Uri.parse(baseUrl + '/queue/' + id.toString()),

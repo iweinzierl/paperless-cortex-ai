@@ -32,6 +32,9 @@ class _QueueScreenState extends State<QueueScreen> {
   QueueItem? _selectedResultItem;
   bool _isResultDrawerOpen = false;
   int? _removingItemId;
+  int? _applyingItemId;
+  String _processingMode = 'manual';
+  bool _hasCompletedTag = false;
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -67,13 +70,19 @@ class _QueueScreenState extends State<QueueScreen> {
       final responses = await Future.wait([
         api.getQueue(status: statusQuery, limit: 100),
         api.getQueue(status: 'processing', limit: 20),
+        api.getConfig(),
       ]);
-      final items = responses[0];
-      final activeItems = responses[1];
+      final items = responses[0] as List<QueueItem>;
+      final activeItems = responses[1] as List<QueueItem>;
+      final config = responses[2] as BackendConfig;
       if (mounted) {
         setState(() {
           _items = items;
           _activeItems = activeItems;
+          _processingMode = config.engine.processingMode;
+          _hasCompletedTag = config.process.processCompletedTag
+              .trim()
+              .isNotEmpty;
           _selectedResultItem = _refreshSelectedItem(
             items,
             _selectedResultItem,
@@ -197,6 +206,83 @@ class _QueueScreenState extends State<QueueScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Remove failed: $errorMessage')));
+    }
+  }
+
+  Future<void> _applyItem(QueueItem item) async {
+    if (_applyingItemId != null) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Apply suggestions?'),
+          content: Text(
+            'This writes the suggested metadata back to Paperless for "${item.documentTitle}" and also applies the configured completed tag.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Apply'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _applyingItemId = item.id;
+    });
+
+    try {
+      final api = context.read<ApiService>();
+      final updatedItem = await api.applyQueueItem(item.id);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _items = _upsertQueueItem(_items, updatedItem);
+        _activeItems = _upsertQueueItem(_activeItems, updatedItem);
+        if (_selectedResultItem?.id == updatedItem.id) {
+          _selectedResultItem = updatedItem;
+        }
+        _applyingItemId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            updatedItem.appliedSummary?.trim().isNotEmpty == true
+                ? updatedItem.appliedSummary!
+                : 'Suggestions applied successfully.',
+          ),
+        ),
+      );
+      await _loadData(showLoadingState: false);
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _applyingItemId = null;
+      });
+      final errorMessage = e is ApiException ? e.message : e.toString();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Apply failed: $errorMessage')));
+      await _loadData(showLoadingState: false);
     }
   }
 
@@ -691,9 +777,21 @@ class _QueueScreenState extends State<QueueScreen> {
             onRemove: _selectedResultItem != null
                 ? () => _removeItem(_selectedResultItem!)
                 : null,
+            onApply: _selectedResultItem != null
+                ? () => _applyItem(_selectedResultItem!)
+                : null,
             isRemoving:
                 _selectedResultItem != null &&
                 _removingItemId == _selectedResultItem!.id,
+            isApplying:
+                _selectedResultItem != null &&
+                _applyingItemId == _selectedResultItem!.id,
+            showApplySuggestions:
+                _selectedResultItem?.canApplySuggestions(
+                  isManualMode: _processingMode == 'manual',
+                  hasCompletedTag: _hasCompletedTag,
+                ) ??
+                false,
           ),
         ),
       ],
