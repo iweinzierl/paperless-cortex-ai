@@ -55,7 +55,7 @@ class DocsScreen extends StatelessWidget {
             title: 'Queue Behavior',
             bullets: [
               'Manual mode requires users to trigger processing from the queue screen.',
-              'Auto mode processes queued items on the configured interval.',
+              'Auto mode polls for idle work on the configured interval, then drains queued items continuously until the queue is empty.',
               'Failed and partially completed items can be retried after review.',
             ],
           ),

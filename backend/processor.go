@@ -18,45 +18,98 @@ import (
 )
 
 type Processor struct {
-	store  *Store
-	logger zerolog.Logger
+	store            *Store
+	logger           zerolog.Logger
+	waitForNextCycle func(context.Context, time.Duration) bool
 }
 
 var errQueueItemNotApplyable = errors.New("queue item is not applyable")
 var errQueueItemAlreadyApplied = errors.New("queue item suggestions were already applied")
 
 func NewProcessor(store *Store, logger zerolog.Logger) *Processor {
-	return &Processor{store: store, logger: logger}
+	return &Processor{
+		store:            store,
+		logger:           logger,
+		waitForNextCycle: waitForNextCycle,
+	}
 }
 
 func (p *Processor) Start(ctx context.Context) {
 	go func() {
 		for {
+			waitInterval := p.loadProcessingWaitInterval(ctx)
+			if !p.waitForNextCycle(ctx, waitInterval) {
+				return
+			}
+
 			cfg, err := p.store.LoadConfig(ctx)
 			if err != nil {
 				p.logger.Error().Err(err).Msg("failed to load backend config for processor loop")
-			}
-
-			waitInterval := 5 * time.Second
-			if cfg.Engine.ProcessingIntervalSeconds > 0 {
-				waitInterval = time.Duration(cfg.Engine.ProcessingIntervalSeconds) * time.Second
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(waitInterval):
+				continue
 			}
 
 			if cfg.Engine.ProcessingMode != ProcessingModeAuto {
 				continue
 			}
 
-			if _, err := p.ProcessNext(ctx); err != nil && err != errNoPendingQueueItems {
-				p.logger.Error().Err(err).Msg("automatic queue processing failed")
-			}
+			p.drainAutomaticQueue(ctx)
 		}
 	}()
+}
+
+func (p *Processor) loadProcessingWaitInterval(ctx context.Context) time.Duration {
+	cfg, err := p.store.LoadConfig(ctx)
+	if err != nil {
+		p.logger.Error().Err(err).Msg("failed to load backend config for processor wait interval")
+		return 5 * time.Second
+	}
+
+	return processingWaitInterval(cfg)
+}
+
+func (p *Processor) drainAutomaticQueue(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		if _, err := p.ProcessNext(ctx); err != nil {
+			if errors.Is(err, errNoPendingQueueItems) {
+				return
+			}
+			p.logger.Error().Err(err).Msg("automatic queue processing failed")
+		}
+
+		cfg, err := p.store.LoadConfig(ctx)
+		if err != nil {
+			p.logger.Error().Err(err).Msg("failed to load backend config while draining automatic queue")
+			return
+		}
+		if cfg.Engine.ProcessingMode != ProcessingModeAuto {
+			return
+		}
+	}
+}
+
+func processingWaitInterval(cfg BackendConfig) time.Duration {
+	waitInterval := 5 * time.Second
+	if cfg.Engine.ProcessingIntervalSeconds > 0 {
+		waitInterval = time.Duration(cfg.Engine.ProcessingIntervalSeconds) * time.Second
+	}
+
+	return waitInterval
+}
+
+func waitForNextCycle(ctx context.Context, waitInterval time.Duration) bool {
+	timer := time.NewTimer(waitInterval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (p *Processor) ProcessNext(ctx context.Context) (*QueueItem, error) {

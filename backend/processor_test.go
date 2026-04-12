@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -653,6 +654,203 @@ func TestProcessorFallsBackToVisionWhenDownloadLacksFilename(t *testing.T) {
 	}
 }
 
+func TestProcessorStartAutoModeDrainsQueuedItemsWithoutExtraIdleWait(t *testing.T) {
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"}],"next":null}`))
+		case r.URL.Path == "/api/documents/41/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":41,"title":"First Item","original_file_name":"first.txt","tags":[1]}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Second Item","original_file_name":"second.txt","tags":[1]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	waitCalls := make(chan time.Duration, 4)
+	releaseWait := make(chan struct{}, 1)
+	processor.waitForNextCycle = func(ctx context.Context, waitInterval time.Duration) bool {
+		waitCalls <- waitInterval
+		select {
+		case <-ctx.Done():
+			return false
+		case <-releaseWait:
+			return true
+		}
+	}
+
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeAuto, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag: "process",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: "http://localhost:11434", DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	firstDocumentID := int64(41)
+	firstItem, err := store.CreateQueueItem(t.Context(), &firstDocumentID, "First Item", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create first queue item: %v", err)
+	}
+	secondDocumentID := int64(42)
+	secondItem, err := store.CreateQueueItem(t.Context(), &secondDocumentID, "Second Item", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create second queue item: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	processor.Start(ctx)
+
+	select {
+	case waitInterval := <-waitCalls:
+		if waitInterval != 30*time.Second {
+			t.Fatalf("expected 30s idle wait interval, got %v", waitInterval)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial auto-mode wait")
+	}
+
+	releaseWait <- struct{}{}
+
+	waitForQueueItemStatus(t, store, firstItem.ID, queueItemStatusCompleted, 2*time.Second)
+	waitForQueueItemStatus(t, store, secondItem.ID, queueItemStatusCompleted, 2*time.Second)
+
+	select {
+	case waitInterval := <-waitCalls:
+		if waitInterval != 30*time.Second {
+			t.Fatalf("expected resumed idle wait interval of 30s, got %v", waitInterval)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for idle polling to resume after queue drain")
+	}
+}
+
+func TestProcessorStartAutoModeStopsClaimingWhenModeSwitchesToManual(t *testing.T) {
+	suggestionStarted := make(chan struct{}, 1)
+	releaseSuggestion := make(chan struct{})
+
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		select {
+		case suggestionStarted <- struct{}{}:
+		default:
+		}
+
+		<-releaseSuggestion
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"document_type_id\":7,\"document_type_name\":\"Invoice\",\"suggested_new_document_type\":null,\"confidence\":\"high\",\"reasoning\":\"Matches invoice wording\"}"}}`))
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"document-type"}],"next":null}`))
+		case r.URL.Path == "/api/document_types/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":7,"name":"Invoice"}],"next":null}`))
+		case r.URL.Path == "/api/documents/41/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":41,"title":"First Item","original_file_name":"first.txt","tags":[1,2]}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Second Item","original_file_name":"second.txt","tags":[1,2]}`))
+		case r.URL.Path == "/api/documents/41/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="first.txt"`)
+			_, _ = w.Write([]byte("Invoice text from first processor item"))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="second.txt"`)
+			_, _ = w.Write([]byte("Invoice text from second processor item"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	waitCalls := make(chan time.Duration, 2)
+	releaseWait := make(chan struct{}, 1)
+	processor.waitForNextCycle = func(ctx context.Context, waitInterval time.Duration) bool {
+		waitCalls <- waitInterval
+		select {
+		case <-ctx.Done():
+			return false
+		case <-releaseWait:
+			return true
+		}
+	}
+
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeAuto, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:      "process",
+			ProcessDocumentTypeTag: "document-type",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	firstDocumentID := int64(41)
+	firstItem, err := store.CreateQueueItem(t.Context(), &firstDocumentID, "First Item", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create first queue item: %v", err)
+	}
+	secondDocumentID := int64(42)
+	secondItem, err := store.CreateQueueItem(t.Context(), &secondDocumentID, "Second Item", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create second queue item: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	processor.Start(ctx)
+
+	select {
+	case <-waitCalls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial auto-mode wait")
+	}
+
+	releaseWait <- struct{}{}
+
+	select {
+	case <-suggestionStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first queued item to start processing")
+	}
+
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:      "process",
+			ProcessDocumentTypeTag: "document-type",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	close(releaseSuggestion)
+
+	waitForQueueItemStatus(t, store, firstItem.ID, queueItemStatusCompleted, 2*time.Second)
+	assertQueueItemStatus(t, store, secondItem.ID, queueItemStatusPending)
+}
+
 func newProcessorTestHarness(t *testing.T) (*Processor, *Store) {
 	t.Helper()
 
@@ -668,6 +866,41 @@ func newProcessorTestHarness(t *testing.T) (*Processor, *Store) {
 
 	logger := zerolog.New(io.Discard)
 	return NewProcessor(store, logger), store
+}
+
+func waitForQueueItemStatus(t *testing.T, store *Store, id int64, wantStatus string, timeout time.Duration) *QueueItem {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		item, err := store.GetQueueItem(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get queue item %d: %v", id, err)
+		}
+		if item.Status == wantStatus {
+			return item
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	item, err := store.GetQueueItem(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get queue item %d after timeout: %v", id, err)
+	}
+	t.Fatalf("expected queue item %d status %q within %v, got %q", id, wantStatus, timeout, item.Status)
+	return nil
+}
+
+func assertQueueItemStatus(t *testing.T, store *Store, id int64, wantStatus string) {
+	t.Helper()
+
+	item, err := store.GetQueueItem(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get queue item %d: %v", id, err)
+	}
+	if item.Status != wantStatus {
+		t.Fatalf("expected queue item %d status %q, got %q", id, wantStatus, item.Status)
+	}
 }
 
 func saveProcessorTestConfig(t *testing.T, store *Store, cfg BackendConfig) {
