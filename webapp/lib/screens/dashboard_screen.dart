@@ -7,6 +7,7 @@ import 'package:webapp/services/api_service.dart';
 import 'package:webapp/services/file_download.dart';
 import 'package:webapp/models/models.dart';
 import 'package:webapp/widgets/process_result_drawer.dart';
+import 'package:webapp/widgets/queue_stage_overview.dart';
 import 'package:intl/intl.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -26,6 +27,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int? _applyingItemId;
   String _processingMode = 'manual';
   bool _hasCompletedTag = false;
+  Set<String> _configuredStageKeys = <String>{'extract_text'};
 
   @override
   void initState() {
@@ -60,6 +62,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _hasCompletedTag = config.process.processCompletedTag
               .trim()
               .isNotEmpty;
+          _configuredStageKeys = configuredQueueStageKeys(config.process);
           _selectedResultItem = _refreshSelectedItem(
             stats.recentRuns,
             _selectedResultItem,
@@ -432,15 +435,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                           ),
                           Expanded(
-                            flex: 2,
-                            child: Text('STATUS', style: _tableHeaderStyle()),
+                            flex: 4,
+                            child: Text('STEPS', style: _tableHeaderStyle()),
                           ),
                           Expanded(
                             flex: 2,
-                            child: Text(
-                              'MODEL USED',
-                              style: _tableHeaderStyle(),
-                            ),
+                            child: Text('STATUS', style: _tableHeaderStyle()),
                           ),
                           Expanded(
                             flex: 2,
@@ -461,6 +461,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                         ],
                       ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
+                      child: QueueStageLegend(),
                     ),
                     if (stats.recentRuns.isEmpty)
                       const Padding(
@@ -633,6 +637,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       color: alternate ? TailwindColors.surface : Colors.transparent,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             flex: 3,
@@ -651,33 +656,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     color: TailwindColors.primary,
                   ),
                 ),
-                const SizedBox(width: 12),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.documentTitle,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: TailwindColors.onSurface,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.documentTitle,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: TailwindColors.onSurface,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        'Source: ${item.source}',
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: TailwindColors.onSurfaceVariant,
+                        Text(
+                          'Source: ${item.source}',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: TailwindColors.onSurfaceVariant,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
           ),
+          Expanded(
+            flex: 4,
+            child: QueueStageGrid(
+              item: item,
+              configuredStageKeys: _configuredStageKeys,
+            ),
+          ),
+          const SizedBox(width: 16),
           Expanded(
             flex: 2,
             child: Row(
@@ -691,36 +706,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  item.status.toUpperCase(),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: TailwindColors.onSurface,
+                Flexible(
+                  child: Text(
+                    item.status.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: TailwindColors.onSurface,
+                    ),
                   ),
                 ),
               ],
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: TailwindColors.surfaceContainerHigh,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  item.usedLlm ?? 'pending',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                    color: TailwindColors.onSurfaceVariant,
-                  ),
-                ),
-              ),
             ),
           ),
           Expanded(

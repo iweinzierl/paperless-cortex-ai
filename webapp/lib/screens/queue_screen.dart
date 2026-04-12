@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:webapp/theme.dart';
 import 'package:webapp/services/api_service.dart';
 import 'package:webapp/models/models.dart';
+import 'package:webapp/widgets/queue_stage_overview.dart';
 import 'package:webapp/widgets/process_result_drawer.dart';
 import 'package:intl/intl.dart';
 
@@ -35,6 +36,7 @@ class _QueueScreenState extends State<QueueScreen> {
   int? _applyingItemId;
   String _processingMode = 'manual';
   bool _hasCompletedTag = false;
+  Set<String> _configuredStageKeys = <String>{'extract_text'};
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -83,6 +85,7 @@ class _QueueScreenState extends State<QueueScreen> {
           _hasCompletedTag = config.process.processCompletedTag
               .trim()
               .isNotEmpty;
+          _configuredStageKeys = configuredQueueStageKeys(config.process);
           _selectedResultItem = _refreshSelectedItem(
             items,
             _selectedResultItem,
@@ -643,6 +646,10 @@ class _QueueScreenState extends State<QueueScreen> {
                         ],
                       ),
                     ),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(24, 0, 24, 16),
+                      child: QueueStageLegend(),
+                    ),
                     Container(
                       color: TailwindColors.surfaceContainer,
                       height: 1,
@@ -661,16 +668,16 @@ class _QueueScreenState extends State<QueueScreen> {
                             child: Text('DOCUMENT', style: _tableHeaderStyle()),
                           ),
                           Expanded(
+                            flex: 4,
+                            child: Text('STEPS', style: _tableHeaderStyle()),
+                          ),
+                          Expanded(
                             flex: 2,
                             child: Text('STATUS', style: _tableHeaderStyle()),
                           ),
                           Expanded(
                             flex: 2,
                             child: Text('ADDED', style: _tableHeaderStyle()),
-                          ),
-                          Expanded(
-                            flex: 2,
-                            child: Text('RETRIES', style: _tableHeaderStyle()),
                           ),
                           const SizedBox(width: 120), // actions spacer
                         ],
@@ -1143,28 +1150,9 @@ class _QueueScreenState extends State<QueueScreen> {
     return labels.join('  •  ');
   }
 
-  Widget _buildRequestedStagePill(ProcessingStageProgress stage) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: TailwindColors.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        stage.label,
-        style: const TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: TailwindColors.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-
   Widget _buildQueueRow(QueueItem item) {
     final canOpenDetails = item.canViewResultDetails;
     final isRemoving = _removingItemId == item.id;
-    final requestedStages = item.requestedStages;
     Color statusColor;
     Color statusBgColor;
     switch (item.status) {
@@ -1199,6 +1187,7 @@ class _QueueScreenState extends State<QueueScreen> {
       ),
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             flex: 3,
@@ -1222,19 +1211,17 @@ class _QueueScreenState extends State<QueueScreen> {
                     color: TailwindColors.onSurfaceVariant,
                   ),
                 ),
-                if (requestedStages.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: requestedStages
-                        .map(_buildRequestedStagePill)
-                        .toList(),
-                  ),
-                ],
               ],
             ),
           ),
+          Expanded(
+            flex: 5,
+            child: QueueStageGrid(
+              item: item,
+              configuredStageKeys: _configuredStageKeys,
+            ),
+          ),
+          const SizedBox(width: 16),
           Expanded(
             flex: 2,
             child: Align(
@@ -1266,17 +1253,6 @@ class _QueueScreenState extends State<QueueScreen> {
               addedStr,
               style: const TextStyle(
                 fontSize: 12,
-                color: TailwindColors.onSurfaceVariant,
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              '${item.attempts}',
-              style: const TextStyle(
-                fontSize: 12,
-                fontFamily: 'monospace',
                 color: TailwindColors.onSurfaceVariant,
               ),
             ),
