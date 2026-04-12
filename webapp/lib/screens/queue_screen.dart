@@ -9,6 +9,8 @@ import 'package:webapp/widgets/queue_stage_overview.dart';
 import 'package:webapp/widgets/process_result_drawer.dart';
 import 'package:intl/intl.dart';
 
+enum QueueSortField { requestedAt, processedAt, title, status }
+
 class QueueScreen extends StatefulWidget {
   const QueueScreen({super.key});
 
@@ -27,6 +29,8 @@ class _QueueScreenState extends State<QueueScreen> {
   List<QueueItem> _activeItems = [];
   String _filterStatus = 'all';
   String _searchQuery = '';
+  QueueSortField _sortField = QueueSortField.requestedAt;
+  bool _sortDescending = true;
   int _currentPage = 0;
   Timer? _pollTimer;
   Timer? _drawerCleanupTimer;
@@ -375,22 +379,89 @@ class _QueueScreenState extends State<QueueScreen> {
 
   List<QueueItem> _filteredItems(List<QueueItem> items) {
     final query = _searchQuery.trim().toLowerCase();
-    if (query.isEmpty) {
-      return items;
-    }
+    final filtered = query.isEmpty
+        ? List<QueueItem>.from(items)
+        : items
+              .where((item) {
+                final haystack = [
+                  item.documentTitle,
+                  item.source,
+                  item.status,
+                  item.documentId?.toString() ?? '',
+                  item.resultSummary ?? '',
+                ].join(' ').toLowerCase();
+                return haystack.contains(query);
+              })
+              .toList(growable: false);
 
-    return items
-        .where((item) {
-          final haystack = [
-            item.documentTitle,
-            item.source,
-            item.status,
-            item.documentId?.toString() ?? '',
-            item.resultSummary ?? '',
-          ].join(' ').toLowerCase();
-          return haystack.contains(query);
-        })
-        .toList(growable: false);
+    filtered.sort(_compareQueueItems);
+    return filtered;
+  }
+
+  int _compareQueueItems(QueueItem a, QueueItem b) {
+    final direction = _sortDescending ? -1 : 1;
+
+    switch (_sortField) {
+      case QueueSortField.requestedAt:
+        return direction * b.requestedAtMs.compareTo(a.requestedAtMs);
+      case QueueSortField.processedAt:
+        return direction *
+            _compareNullableInts(b.completedAtMs, a.completedAtMs);
+      case QueueSortField.title:
+        final titleComparison = a.documentTitle.toLowerCase().compareTo(
+          b.documentTitle.toLowerCase(),
+        );
+        if (titleComparison != 0) {
+          return direction * titleComparison;
+        }
+        return direction * b.requestedAtMs.compareTo(a.requestedAtMs);
+      case QueueSortField.status:
+        final statusComparison = a.status.compareTo(b.status);
+        if (statusComparison != 0) {
+          return direction * statusComparison;
+        }
+        return direction * b.requestedAtMs.compareTo(a.requestedAtMs);
+    }
+  }
+
+  int _compareNullableInts(int? a, int? b) {
+    if (a == null && b == null) {
+      return 0;
+    }
+    if (a == null) {
+      return 1;
+    }
+    if (b == null) {
+      return -1;
+    }
+    return a.compareTo(b);
+  }
+
+  void _setSortField(QueueSortField value) {
+    setState(() {
+      _sortField = value;
+      _currentPage = 0;
+    });
+  }
+
+  void _toggleSortDirection() {
+    setState(() {
+      _sortDescending = !_sortDescending;
+      _currentPage = 0;
+    });
+  }
+
+  String _sortFieldLabel(QueueSortField value) {
+    switch (value) {
+      case QueueSortField.requestedAt:
+        return 'Added time';
+      case QueueSortField.processedAt:
+        return 'Processed time';
+      case QueueSortField.title:
+        return 'Document title';
+      case QueueSortField.status:
+        return 'Status';
+    }
   }
 
   int _pageCount(List<QueueItem> items) {
@@ -586,6 +657,67 @@ class _QueueScreenState extends State<QueueScreen> {
                               ),
                             ),
                           ),
+                          const SizedBox(width: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: TailwindColors.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<QueueSortField>(
+                                value: _sortField,
+                                isDense: true,
+                                icon: const Icon(
+                                  Icons.sort,
+                                  size: 16,
+                                  color: TailwindColors.onSurfaceVariant,
+                                ),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: TailwindColors.onSurface,
+                                ),
+                                onChanged: (QueueSortField? newValue) {
+                                  if (newValue != null) {
+                                    _setSortField(newValue);
+                                  }
+                                },
+                                items: QueueSortField.values
+                                    .map(
+                                      (value) =>
+                                          DropdownMenuItem<QueueSortField>(
+                                            value: value,
+                                            child: Text(_sortFieldLabel(value)),
+                                          ),
+                                    )
+                                    .toList(growable: false),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: TailwindColors.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: IconButton(
+                              onPressed: _toggleSortDirection,
+                              tooltip: _sortDescending
+                                  ? 'Sort descending'
+                                  : 'Sort ascending',
+                              icon: Icon(
+                                _sortDescending
+                                    ? Icons.arrow_downward
+                                    : Icons.arrow_upward,
+                                size: 18,
+                                color: TailwindColors.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
                           const Spacer(),
                           // Search inside items
                           Container(
@@ -677,7 +809,10 @@ class _QueueScreenState extends State<QueueScreen> {
                           ),
                           Expanded(
                             flex: 2,
-                            child: Text('ADDED', style: _tableHeaderStyle()),
+                            child: Text(
+                              'TIMESTAMPS',
+                              style: _tableHeaderStyle(),
+                            ),
                           ),
                           const SizedBox(width: 120), // actions spacer
                         ],
@@ -1180,6 +1315,9 @@ class _QueueScreenState extends State<QueueScreen> {
     final addedStr = DateFormat(
       'MMM d, yyyy HH:mm',
     ).format(DateTime.fromMillisecondsSinceEpoch(item.requestedAtMs));
+    final processedStr = item.completedAt == null
+        ? 'Not processed yet'
+        : DateFormat('MMM d, yyyy HH:mm').format(item.completedAt!);
 
     final row = Container(
       decoration: const BoxDecoration(
@@ -1249,12 +1387,25 @@ class _QueueScreenState extends State<QueueScreen> {
           ),
           Expanded(
             flex: 2,
-            child: Text(
-              addedStr,
-              style: const TextStyle(
-                fontSize: 12,
-                color: TailwindColors.onSurfaceVariant,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  addedStr,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: TailwindColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  processedStr,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: TailwindColors.outline,
+                  ),
+                ),
+              ],
             ),
           ),
           SizedBox(
@@ -1283,56 +1434,54 @@ class _QueueScreenState extends State<QueueScreen> {
                     item.status == 'partially_completed')
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: OutlinedButton.icon(
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.refresh,
+                        size: 20,
+                        color: TailwindColors.primary,
+                      ),
+                      tooltip: 'Retry item',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
                       onPressed: isRemoving
                           ? null
                           : () => _processItem(item.id),
-                      icon: const Icon(
-                        Icons.refresh,
-                        size: 16,
-                        color: TailwindColors.primary,
-                      ),
-                      label: const Text(
-                        'Retry',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: TailwindColors.primary,
-                        side: BorderSide(
-                          color: TailwindColors.primary.withValues(alpha: 0.22),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        visualDensity: VisualDensity.compact,
-                      ),
                     ),
                   ),
-                if (item.canRemoveFromQueue)
-                  IconButton(
-                    onPressed: isRemoving ? null : () => _removeItem(item),
-                    tooltip: 'Remove from queue',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    icon: isRemoving
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(
-                            Icons.delete_outline,
-                            size: 22,
-                            color: TailwindColors.error,
-                          ),
+                if (canOpenDetails)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.visibility_outlined,
+                        size: 20,
+                        color: TailwindColors.onSurfaceVariant,
+                      ),
+                      tooltip: 'View results',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: isRemoving
+                          ? null
+                          : () => _openResultDrawer(item),
+                    ),
                   ),
+                IconButton(
+                  icon: Icon(
+                    Icons.delete_outline,
+                    size: 20,
+                    color: isRemoving
+                        ? TailwindColors.outline
+                        : TailwindColors.error,
+                  ),
+                  tooltip: item.canRemoveFromQueue
+                      ? 'Remove queue item'
+                      : 'Cannot remove while processing',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: isRemoving || !item.canRemoveFromQueue
+                      ? null
+                      : () => _removeItem(item),
+                ),
               ],
             ),
           ),
@@ -1340,17 +1489,14 @@ class _QueueScreenState extends State<QueueScreen> {
       ),
     );
 
-    if (!canOpenDetails) {
-      return row;
-    }
-
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
+      cursor: canOpenDetails
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.basic,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => _openResultDrawer(item),
-          hoverColor: TailwindColors.primary.withValues(alpha: 0.04),
+          onTap: canOpenDetails ? () => _openResultDrawer(item) : null,
           child: row,
         ),
       ),

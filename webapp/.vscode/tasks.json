@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "flutter config list",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"config",
+				"--list"
+			],
+			"isBackground": false
+		}
+	]
+}
