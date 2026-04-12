@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 )
+
 type ProcessingMode string
 
 const (
@@ -27,9 +28,11 @@ type ProcessConfig struct {
 	ProcessTriggerTag       string `json:"process_trigger_tag"`
 	ForceOCRTag             string `json:"force_ocr_tag"`
 	ForceVisionTag          string `json:"force_vision_tag"`
+	ProcessCreatedDateTag   string `json:"process_created_date_tag"`
 	ProcessCorrespondentTag string `json:"process_correspondent_tag"`
 	ProcessDocumentTypeTag  string `json:"process_document_type_tag"`
 	ProcessDocumentTagsTag  string `json:"process_document_tags_tag"`
+	ProcessTitleTag         string `json:"process_title_tag"`
 	ProcessCompletedTag     string `json:"process_completed_tag"`
 }
 
@@ -71,9 +74,11 @@ func (cfg *BackendConfig) Normalize() {
 	cfg.Process.ProcessTriggerTag = strings.TrimSpace(cfg.Process.ProcessTriggerTag)
 	cfg.Process.ForceOCRTag = strings.TrimSpace(cfg.Process.ForceOCRTag)
 	cfg.Process.ForceVisionTag = strings.TrimSpace(cfg.Process.ForceVisionTag)
+	cfg.Process.ProcessCreatedDateTag = strings.TrimSpace(cfg.Process.ProcessCreatedDateTag)
 	cfg.Process.ProcessCorrespondentTag = strings.TrimSpace(cfg.Process.ProcessCorrespondentTag)
 	cfg.Process.ProcessDocumentTypeTag = strings.TrimSpace(cfg.Process.ProcessDocumentTypeTag)
 	cfg.Process.ProcessDocumentTagsTag = strings.TrimSpace(cfg.Process.ProcessDocumentTagsTag)
+	cfg.Process.ProcessTitleTag = strings.TrimSpace(cfg.Process.ProcessTitleTag)
 	cfg.Process.ProcessCompletedTag = strings.TrimSpace(cfg.Process.ProcessCompletedTag)
 
 	cfg.Paperless.PaperlessURL = strings.TrimSpace(cfg.Paperless.PaperlessURL)

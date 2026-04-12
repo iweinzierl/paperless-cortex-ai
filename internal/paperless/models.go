@@ -55,8 +55,9 @@ type Document struct {
 	DocumentTypeID    *int64          `json:"document_type,omitempty"`
 	TagIDs            []int64         `json:"tags,omitempty"`
 	Content           string          `json:"content,omitempty"`
-	CreatedDate       string          `json:"created,omitempty"`
-	ModifiedDate      string          `json:"modified,omitempty"`
+	Created           string          `json:"created,omitempty"`
+	Added             string          `json:"added,omitempty"`
+	Modified          string          `json:"modified,omitempty"`
 	DocumentURL       string          `json:"document_url,omitempty"`
 	OriginalFileURL   string          `json:"original_file,omitempty"`
 	ArchivedFileURL   string          `json:"archived_file,omitempty"`
@@ -66,6 +67,8 @@ type Document struct {
 }
 
 type DocumentPatch struct {
+	Title           *string `json:"title,omitempty"`
+	Created         *string `json:"created,omitempty"`
 	CorrespondentID *int64  `json:"correspondent,omitempty"`
 	DocumentTypeID  *int64  `json:"document_type,omitempty"`
 	TagIDs          []int64 `json:"tags,omitempty"`

@@ -141,6 +141,12 @@ func TestClientPatchDocumentSendsPatchPayload(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
+		if payload["title"].(string) != "Patched title" {
+			t.Fatalf("expected title Patched title, got %+v", payload)
+		}
+		if payload["created"].(string) != "2026-03-15" {
+			t.Fatalf("expected created 2026-03-15, got %+v", payload)
+		}
 		if payload["correspondent"].(float64) != 7 {
 			t.Fatalf("expected correspondent 7, got %+v", payload)
 		}
@@ -159,8 +165,12 @@ func TestClientPatchDocumentSendsPatchPayload(t *testing.T) {
 
 	correspondentID := int64(7)
 	documentTypeID := int64(5)
+	title := "Patched title"
+	created := "2026-03-15"
 	client := NewClient(server.URL, "token")
 	document, err := client.PatchDocument(t.Context(), 42, DocumentPatch{
+		Title:           &title,
+		Created:         &created,
 		CorrespondentID: &correspondentID,
 		DocumentTypeID:  &documentTypeID,
 		TagIDs:          []int64{3, 4},

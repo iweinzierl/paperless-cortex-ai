@@ -20,23 +20,27 @@ type ProcessingPlan struct {
 	TriggerTagPresent  bool     `json:"trigger_tag_present"`
 	ForceOCR           bool     `json:"force_ocr"`
 	ForceVision        bool     `json:"force_vision"`
+	CreatedDate        bool     `json:"process_created_date"`
 	Correspondent      bool     `json:"process_correspondent"`
 	DocumentType       bool     `json:"process_document_type"`
 	DocumentTags       bool     `json:"process_document_tags"`
+	Title              bool     `json:"process_title"`
 	RequestedStageList []string `json:"requested_stages"`
 }
 
 func (plan ProcessingPlan) HasRequestedWork() bool {
-	return plan.ForceOCR || plan.ForceVision || plan.Correspondent || plan.DocumentType || plan.DocumentTags
+	return plan.ForceOCR || plan.ForceVision || plan.CreatedDate || plan.Correspondent || plan.DocumentType || plan.DocumentTags || plan.Title
 }
 
 type ProcessingResult struct {
 	Document      ProcessingDocumentSummary `json:"document"`
 	Plan          ProcessingPlan            `json:"plan"`
 	Extraction    ExtractionStageResult     `json:"extraction"`
+	CreatedDate   SuggestionStageResult     `json:"created_date"`
 	Correspondent SuggestionStageResult     `json:"correspondent"`
 	DocumentType  SuggestionStageResult     `json:"document_type"`
 	Tags          SuggestionStageResult     `json:"tags"`
+	Title         SuggestionStageResult     `json:"title"`
 	Notes         []string                  `json:"notes,omitempty"`
 }
 
@@ -46,6 +50,8 @@ type ProcessingDocumentSummary struct {
 	TagIDs            []int64  `json:"tag_ids,omitempty"`
 	TagNames          []string `json:"tag_names,omitempty"`
 	OriginalFileName  string   `json:"original_file_name,omitempty"`
+	Created           string   `json:"created,omitempty"`
+	Added             string   `json:"added,omitempty"`
 	CorrespondentID   *int64   `json:"correspondent_id,omitempty"`
 	CorrespondentName string   `json:"correspondent_name,omitempty"`
 	DocumentTypeID    *int64   `json:"document_type_id,omitempty"`
@@ -74,12 +80,17 @@ func newProcessingResult(document *paperless.Document, tagNames []string, plan P
 	result := ProcessingResult{
 		Plan:          plan,
 		Extraction:    ExtractionStageResult{Status: stageStatusSkipped},
+		CreatedDate:   SuggestionStageResult{Status: stageStatusSkipped},
 		Correspondent: SuggestionStageResult{Status: stageStatusSkipped},
 		DocumentType:  SuggestionStageResult{Status: stageStatusSkipped},
 		Tags:          SuggestionStageResult{Status: stageStatusSkipped},
+		Title:         SuggestionStageResult{Status: stageStatusSkipped},
 	}
 	if len(plan.RequestedStageList) > 0 {
 		result.Extraction.Status = stageStatusPending
+	}
+	if plan.CreatedDate {
+		result.CreatedDate.Status = stageStatusPending
 	}
 	if plan.Correspondent {
 		result.Correspondent.Status = stageStatusPending
@@ -90,6 +101,9 @@ func newProcessingResult(document *paperless.Document, tagNames []string, plan P
 	if plan.DocumentTags {
 		result.Tags.Status = stageStatusPending
 	}
+	if plan.Title {
+		result.Title.Status = stageStatusPending
+	}
 	if document != nil {
 		result.Document = ProcessingDocumentSummary{
 			ID:                document.ID,
@@ -97,6 +111,8 @@ func newProcessingResult(document *paperless.Document, tagNames []string, plan P
 			TagIDs:            append([]int64(nil), document.TagIDs...),
 			TagNames:          append([]string(nil), tagNames...),
 			OriginalFileName:  document.OriginalFileName,
+			Created:           document.Created,
+			Added:             document.Added,
 			CorrespondentID:   document.CorrespondentID,
 			CorrespondentName: strings.TrimSpace(document.CorrespondentName),
 			DocumentTypeID:    document.DocumentTypeID,
@@ -119,12 +135,17 @@ func buildProcessingPlan(cfg ProcessConfig, tagNameSet map[string]struct{}) Proc
 		TriggerTagPresent: hasNamedTag(tagNameSet, cfg.ProcessTriggerTag),
 		ForceOCR:          hasNamedTag(tagNameSet, cfg.ForceOCRTag),
 		ForceVision:       hasNamedTag(tagNameSet, cfg.ForceVisionTag),
+		CreatedDate:       hasNamedTag(tagNameSet, cfg.ProcessCreatedDateTag),
 		Correspondent:     hasNamedTag(tagNameSet, cfg.ProcessCorrespondentTag),
 		DocumentType:      hasNamedTag(tagNameSet, cfg.ProcessDocumentTypeTag),
 		DocumentTags:      hasNamedTag(tagNameSet, cfg.ProcessDocumentTagsTag),
+		Title:             hasNamedTag(tagNameSet, cfg.ProcessTitleTag),
 	}
 	if plan.HasRequestedWork() {
 		plan.RequestedStageList = append(plan.RequestedStageList, "extract_text")
+	}
+	if plan.CreatedDate {
+		plan.RequestedStageList = append(plan.RequestedStageList, "created_date")
 	}
 	if plan.Correspondent {
 		plan.RequestedStageList = append(plan.RequestedStageList, "correspondent")
@@ -134,6 +155,9 @@ func buildProcessingPlan(cfg ProcessConfig, tagNameSet map[string]struct{}) Proc
 	}
 	if plan.DocumentTags {
 		plan.RequestedStageList = append(plan.RequestedStageList, "tags")
+	}
+	if plan.Title {
+		plan.RequestedStageList = append(plan.RequestedStageList, "title")
 	}
 	return plan
 }
@@ -198,5 +222,13 @@ func documentTypeStagePayload(suggestion classification.DocumentTypeSuggestion) 
 }
 
 func tagsStagePayload(suggestion classification.TagSuggestion) any {
+	return suggestion
+}
+
+func createdDateStagePayload(suggestion classification.CreatedDateSuggestion) any {
+	return suggestion
+}
+
+func titleStagePayload(suggestion classification.TitleSuggestion) any {
 	return suggestion
 }

@@ -16,6 +16,21 @@ import (
 	"github.com/rs/zerolog"
 )
 
+func writeImplicitSuggestionResponse(w http.ResponseWriter, requestBody []byte) bool {
+	payload := string(requestBody)
+	w.Header().Set("Content-Type", "application/json")
+	switch {
+	case strings.Contains(payload, "extracting the document creation date"):
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"created\":\"2026-03-15\",\"confidence\":\"high\",\"reasoning\":\"Das Dokument ist auf den 15.03.2026 datiert.\"}"}}`))
+		return true
+	case strings.Contains(payload, "generating a document title"):
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"title\":\"Allgemeiner Dokumenttitel\",\"confidence\":\"medium\",\"reasoning\":\"Ein kompakter Titel wurde aus dem Dokumentinhalt abgeleitet.\"}"}}`))
+		return true
+	default:
+		return false
+	}
+}
+
 func TestProcessorProcessesDocumentTypeSuggestion(t *testing.T) {
 	ollamaRequests := 0
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -27,6 +42,9 @@ func TestProcessorProcessesDocumentTypeSuggestion(t *testing.T) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read ollama request: %v", err)
+		}
+		if writeImplicitSuggestionResponse(w, body) {
+			return
 		}
 		ollamaRequests++
 		if !strings.Contains(string(body), "Invoice text from processor test") {
@@ -120,6 +138,14 @@ func TestProcessorPersistsRunningStageProgress(t *testing.T) {
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
 			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		if writeImplicitSuggestionResponse(w, body) {
 			return
 		}
 
@@ -289,6 +315,14 @@ func TestProcessorAutoModeAppliesSuggestionsAfterProcessing(t *testing.T) {
 			return
 		}
 
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		if writeImplicitSuggestionResponse(w, body) {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"tag_ids\":[2],\"tag_names\":[\"invoice\"],\"suggested_new_tags\":[],\"confidence\":\"high\",\"reasoning\":\"Matches invoice wording\"}"}}`))
 	}))
@@ -360,6 +394,209 @@ func TestProcessorAutoModeAppliesSuggestionsAfterProcessing(t *testing.T) {
 	}
 }
 
+func TestProcessorProcessesCreatedDateAndTitleSuggestions(t *testing.T) {
+	createdDateRequests := 0
+	titleRequests := 0
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		payload := string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(payload, "extracting the document creation date"):
+			createdDateRequests++
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"created\":\"2026-03-15\",\"confidence\":\"high\",\"reasoning\":\"Das Dokument ist auf den 15.03.2026 datiert.\"}"}}`))
+		case strings.Contains(payload, "generating a document title"):
+			titleRequests++
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"title\":\"Telekom Rechnung Maerz 2026\",\"confidence\":\"high\",\"reasoning\":\"Aussteller, Dokumenttyp und Monat sind klar erkennbar.\"}"}}`))
+		default:
+			t.Fatalf("unexpected ollama prompt: %s", payload)
+		}
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"created-date"},{"id":3,"name":"title"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"scan-42","original_file_name":"invoice.txt","created":"2026-04-12","added":"2026-04-13T10:00:00Z","tags":[1,2,3]}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="invoice.txt"`)
+			_, _ = w.Write([]byte("Telekom Rechnung vom 15.03.2026 fuer Maerz 2026"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:     "process",
+			ProcessCreatedDateTag: "created-date",
+			ProcessTitleTag:       "title",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	documentID := int64(42)
+	if _, err := store.CreateQueueItem(t.Context(), &documentID, "scan-42", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	item, err := processor.ProcessNext(t.Context())
+	if err != nil {
+		t.Fatalf("process next queue item: %v", err)
+	}
+	if item.Status != queueItemStatusCompleted {
+		t.Fatalf("expected completed status, got %q", item.Status)
+	}
+	if createdDateRequests != 1 {
+		t.Fatalf("expected 1 creation-date request, got %d", createdDateRequests)
+	}
+	if titleRequests != 1 {
+		t.Fatalf("expected 1 title request, got %d", titleRequests)
+	}
+
+	var result ProcessingResult
+	if err := json.Unmarshal([]byte(item.ResultPayload), &result); err != nil {
+		t.Fatalf("decode result payload: %v", err)
+	}
+	if !result.Plan.CreatedDate || !result.Plan.Title {
+		t.Fatalf("expected configured created-date and title stages in plan, got %+v", result.Plan)
+	}
+	if result.CreatedDate.Status != stageStatusCompleted {
+		t.Fatalf("expected created-date stage completed, got %+v", result.CreatedDate)
+	}
+	if result.Title.Status != stageStatusCompleted {
+		t.Fatalf("expected title stage completed, got %+v", result.Title)
+	}
+	if !strings.Contains(item.ResultSummary, "creation date suggestion") {
+		t.Fatalf("expected creation date summary, got %q", item.ResultSummary)
+	}
+	if !strings.Contains(item.ResultSummary, "title suggestion") {
+		t.Fatalf("expected title summary, got %q", item.ResultSummary)
+	}
+	if !strings.Contains(item.ResultPayload, `"created":"2026-03-15"`) {
+		t.Fatalf("expected created-date suggestion in result payload, got %s", item.ResultPayload)
+	}
+	if !strings.Contains(item.ResultPayload, `"title":"Telekom Rechnung Maerz 2026"`) {
+		t.Fatalf("expected title suggestion in result payload, got %s", item.ResultPayload)
+	}
+}
+
+func TestProcessorAutoModeAppliesCreatedDateAndTitleBeforeCompletedTag(t *testing.T) {
+	patched := false
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		payload := string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(payload, "extracting the document creation date"):
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"created\":\"2026-03-15\",\"confidence\":\"high\",\"reasoning\":\"Das Dokument ist auf den 15.03.2026 datiert.\"}"}}`))
+		case strings.Contains(payload, "generating a document title"):
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"title\":\"Telekom Rechnung Maerz 2026\",\"confidence\":\"high\",\"reasoning\":\"Aussteller, Dokumenttyp und Monat sind klar erkennbar.\"}"}}`))
+		default:
+			t.Fatalf("unexpected ollama prompt: %s", payload)
+		}
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/" && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"created-date"},{"id":3,"name":"title"},{"id":4,"name":"completed"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/" && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"scan-42","original_file_name":"invoice.txt","created":"2026-04-12","tags":[1,2,3]}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="invoice.txt"`)
+			_, _ = w.Write([]byte("Telekom Rechnung vom 15.03.2026 fuer Maerz 2026"))
+		case r.URL.Path == "/api/documents/42/" && r.Method == http.MethodPatch:
+			patched = true
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			if payload["created"].(string) != "2026-03-15" {
+				t.Fatalf("expected created 2026-03-15, got %+v", payload)
+			}
+			if payload["title"].(string) != "Telekom Rechnung Maerz 2026" {
+				t.Fatalf("expected title suggestion, got %+v", payload)
+			}
+			tags := payload["tags"].([]any)
+			if len(tags) != 1 || tags[0].(float64) != 4 {
+				t.Fatalf("expected final tag ids [4], got %+v", payload)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Telekom Rechnung Maerz 2026","created":"2026-03-15","tags":[4]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeAuto, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:     "process",
+			ProcessCreatedDateTag: "created-date",
+			ProcessTitleTag:       "title",
+			ProcessCompletedTag:   "completed",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
+	})
+
+	documentID := int64(42)
+	if _, err := store.CreateQueueItem(t.Context(), &documentID, "scan-42", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	item, err := processor.ProcessNext(t.Context())
+	if err != nil {
+		t.Fatalf("process next queue item: %v", err)
+	}
+	if item.Status != queueItemStatusCompleted {
+		t.Fatalf("expected completed status, got %q", item.Status)
+	}
+	if item.ApplyStatus != "applied" {
+		t.Fatalf("expected apply status applied, got %q", item.ApplyStatus)
+	}
+	if !patched {
+		t.Fatal("expected paperless patch request in auto mode")
+	}
+	if !strings.Contains(item.AppliedSummary, "completed tag") {
+		t.Fatalf("expected applied summary mentioning completed tag, got %q", item.AppliedSummary)
+	}
+}
+
 func TestProcessorUsesHistoricalDocumentsForCorrespondentSuggestion(t *testing.T) {
 	ollamaRequests := 0
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +608,9 @@ func TestProcessorUsesHistoricalDocumentsForCorrespondentSuggestion(t *testing.T
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read ollama request: %v", err)
+		}
+		if writeImplicitSuggestionResponse(w, body) {
+			return
 		}
 		ollamaRequests++
 		payload := string(body)
@@ -449,6 +689,14 @@ func TestProcessorContinuesAfterSuggestionStageFailure(t *testing.T) {
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
 			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		if writeImplicitSuggestionResponse(w, body) {
 			return
 		}
 
@@ -554,6 +802,9 @@ func TestProcessorFallsBackToVisionWhenDownloadLacksFilename(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read ollama request: %v", err)
 		}
+		if writeImplicitSuggestionResponse(w, body) {
+			return
+		}
 		ollamaRequests++
 		if ollamaRequests == 1 {
 			http.Error(w, "ocr model failure", http.StatusInternalServerError)
@@ -655,6 +906,24 @@ func TestProcessorFallsBackToVisionWhenDownloadLacksFilename(t *testing.T) {
 }
 
 func TestProcessorStartAutoModeDrainsQueuedItemsWithoutExtraIdleWait(t *testing.T) {
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		if writeImplicitSuggestionResponse(w, body) {
+			return
+		}
+
+		http.Error(w, "unexpected ollama prompt", http.StatusBadRequest)
+	}))
+	defer ollamaServer.Close()
+
 	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/tags/":
@@ -666,6 +935,14 @@ func TestProcessorStartAutoModeDrainsQueuedItemsWithoutExtraIdleWait(t *testing.
 		case r.URL.Path == "/api/documents/42/":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":42,"title":"Second Item","original_file_name":"second.txt","tags":[1]}`))
+		case r.URL.Path == "/api/documents/41/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="first.txt"`)
+			_, _ = w.Write([]byte("First processor item dated 15.03.2026"))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="second.txt"`)
+			_, _ = w.Write([]byte("Second processor item dated 15.03.2026"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -691,7 +968,7 @@ func TestProcessorStartAutoModeDrainsQueuedItemsWithoutExtraIdleWait(t *testing.
 			ProcessTriggerTag: "process",
 		},
 		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
-		LLMs:      LLMConfig{OllamaURL: "http://localhost:11434", DefaultLLM: "llama3.2", VisionLLM: "llava"},
+		LLMs:      LLMConfig{OllamaURL: ollamaServer.URL, DefaultLLM: "llama3.2", VisionLLM: "llava"},
 	})
 
 	firstDocumentID := int64(41)
@@ -740,6 +1017,14 @@ func TestProcessorStartAutoModeStopsClaimingWhenModeSwitchesToManual(t *testing.
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
 			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ollama request: %v", err)
+		}
+		if writeImplicitSuggestionResponse(w, body) {
 			return
 		}
 

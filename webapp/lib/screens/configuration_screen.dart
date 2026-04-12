@@ -24,9 +24,11 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
   final _triggerController = TextEditingController();
   final _ocrController = TextEditingController();
   final _visionController = TextEditingController();
+  final _createdDateController = TextEditingController();
   final _corrController = TextEditingController();
   final _typeController = TextEditingController();
   final _tagsController = TextEditingController();
+  final _titleController = TextEditingController();
   final _compController = TextEditingController();
 
   final _ollamaUrlController = TextEditingController();
@@ -87,9 +89,11 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
           _triggerController.text = config.process.processTriggerTag;
           _ocrController.text = config.process.forceOcrTag;
           _visionController.text = config.process.forceVisionTag;
+          _createdDateController.text = config.process.processCreatedDateTag;
           _corrController.text = config.process.processCorrespondentTag;
           _typeController.text = config.process.processDocumentTypeTag;
           _tagsController.text = config.process.processDocumentTagsTag;
+          _titleController.text = config.process.processTitleTag;
           _compController.text = config.process.processCompletedTag;
 
           _ollamaUrlController.text = config.llms.ollamaUrl;
@@ -132,9 +136,11 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
           processTriggerTag: _triggerController.text,
           forceOcrTag: _ocrController.text,
           forceVisionTag: _visionController.text,
+          processCreatedDateTag: _createdDateController.text,
           processCorrespondentTag: _corrController.text,
           processDocumentTypeTag: _typeController.text,
           processDocumentTagsTag: _tagsController.text,
+          processTitleTag: _titleController.text,
           processCompletedTag: _compController.text,
         ),
         paperless: PaperlessConfig(
@@ -313,6 +319,26 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                                 'VISION',
                                 null,
                                 _visionController,
+                              ),
+                            ),
+                            const SizedBox(width: 32),
+                            Expanded(
+                              child: _buildTagAutocompleteField(
+                                'CREATED DATE',
+                                null,
+                                _createdDateController,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildTagAutocompleteField(
+                                'TITLE',
+                                null,
+                                _titleController,
                               ),
                             ),
                             const SizedBox(width: 32),

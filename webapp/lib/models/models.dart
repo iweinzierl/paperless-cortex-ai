@@ -131,18 +131,22 @@ class ProcessConfig {
   final String processTriggerTag;
   final String forceOcrTag;
   final String forceVisionTag;
+  final String processCreatedDateTag;
   final String processCorrespondentTag;
   final String processDocumentTypeTag;
   final String processDocumentTagsTag;
+  final String processTitleTag;
   final String processCompletedTag;
 
   ProcessConfig({
     required this.processTriggerTag,
     required this.forceOcrTag,
     required this.forceVisionTag,
+    required this.processCreatedDateTag,
     required this.processCorrespondentTag,
     required this.processDocumentTypeTag,
     required this.processDocumentTagsTag,
+    required this.processTitleTag,
     required this.processCompletedTag,
   });
 
@@ -151,12 +155,14 @@ class ProcessConfig {
       processTriggerTag: _asString(json['process_trigger_tag']) ?? '',
       forceOcrTag: _asString(json['force_ocr_tag']) ?? '',
       forceVisionTag: _asString(json['force_vision_tag']) ?? '',
+      processCreatedDateTag: _asString(json['process_created_date_tag']) ?? '',
       processCorrespondentTag:
           _asString(json['process_correspondent_tag']) ?? '',
       processDocumentTypeTag:
           _asString(json['process_document_type_tag']) ?? '',
       processDocumentTagsTag:
           _asString(json['process_document_tags_tag']) ?? '',
+      processTitleTag: _asString(json['process_title_tag']) ?? '',
       processCompletedTag: _asString(json['process_completed_tag']) ?? '',
     );
   }
@@ -166,9 +172,11 @@ class ProcessConfig {
       'process_trigger_tag': processTriggerTag,
       'force_ocr_tag': forceOcrTag,
       'force_vision_tag': forceVisionTag,
+      'process_created_date_tag': processCreatedDateTag,
       'process_correspondent_tag': processCorrespondentTag,
       'process_document_type_tag': processDocumentTypeTag,
       'process_document_tags_tag': processDocumentTagsTag,
+      'process_title_tag': processTitleTag,
       'process_completed_tag': processCompletedTag,
     };
   }
@@ -246,18 +254,22 @@ class ProcessingPlanModel {
   final bool triggerTagPresent;
   final bool forceOcr;
   final bool forceVision;
+  final bool processCreatedDate;
   final bool processCorrespondent;
   final bool processDocumentType;
   final bool processDocumentTags;
+  final bool processTitle;
   final List<String> requestedStages;
 
   ProcessingPlanModel({
     required this.triggerTagPresent,
     required this.forceOcr,
     required this.forceVision,
+    required this.processCreatedDate,
     required this.processCorrespondent,
     required this.processDocumentType,
     required this.processDocumentTags,
+    required this.processTitle,
     required this.requestedStages,
   });
 
@@ -275,9 +287,11 @@ class ProcessingPlanModel {
       triggerTagPresent: json['trigger_tag_present'] == true,
       forceOcr: json['force_ocr'] == true,
       forceVision: json['force_vision'] == true,
+      processCreatedDate: json['process_created_date'] == true,
       processCorrespondent: json['process_correspondent'] == true,
       processDocumentType: json['process_document_type'] == true,
       processDocumentTags: json['process_document_tags'] == true,
+      processTitle: json['process_title'] == true,
       requestedStages: requestedStages,
     );
   }
@@ -383,18 +397,22 @@ class ProcessingResultModel {
   final ProcessingDocumentModel? document;
   final ProcessingPlanModel? plan;
   final ExtractionStageModel extraction;
+  final SuggestionStageModel createdDate;
   final SuggestionStageModel correspondent;
   final SuggestionStageModel documentType;
   final SuggestionStageModel tags;
+  final SuggestionStageModel title;
   final List<String> notes;
 
   ProcessingResultModel({
     required this.document,
     required this.plan,
     required this.extraction,
+    required this.createdDate,
     required this.correspondent,
     required this.documentType,
     required this.tags,
+    required this.title,
     required this.notes,
   });
 
@@ -418,6 +436,9 @@ class ProcessingResultModel {
       extraction: ExtractionStageModel.fromJson(
         _asMap(json['extraction']) ?? {},
       ),
+      createdDate: SuggestionStageModel.fromJson(
+        _asMap(json['created_date']) ?? {},
+      ),
       correspondent: SuggestionStageModel.fromJson(
         _asMap(json['correspondent']) ?? {},
       ),
@@ -425,15 +446,18 @@ class ProcessingResultModel {
         _asMap(json['document_type']) ?? {},
       ),
       tags: SuggestionStageModel.fromJson(_asMap(json['tags']) ?? {}),
+      title: SuggestionStageModel.fromJson(_asMap(json['title']) ?? {}),
       notes: notes,
     );
   }
 
   List<ProcessingStageProgress> get stages => [
     extraction.toStageProgress(),
+    createdDate.toStageProgress('created_date', 'Created Date'),
     correspondent.toStageProgress('correspondent', 'Correspondent'),
     documentType.toStageProgress('document_type', 'Document Type'),
     tags.toStageProgress('tags', 'Tags'),
+    title.toStageProgress('title', 'Title'),
   ];
 
   List<ProcessingStageProgress> get requestedStages =>
@@ -447,9 +471,11 @@ class ProcessingResultModel {
   bool get hasFailure => requestedStages.any((stage) => stage.isFailed);
 
   bool get hasCompletedSuggestion =>
+      createdDate.status == 'completed' ||
       correspondent.status == 'completed' ||
       documentType.status == 'completed' ||
-      tags.status == 'completed';
+      tags.status == 'completed' ||
+      title.status == 'completed';
 
   ProcessingStageProgress? get activeStage {
     for (final stage in requestedStages) {
@@ -502,6 +528,8 @@ class ProcessingResultModel {
 class ProcessingDocumentModel {
   final int id;
   final String title;
+  final String created;
+  final String added;
   final int? correspondentId;
   final String correspondentName;
   final int? documentTypeId;
@@ -510,6 +538,8 @@ class ProcessingDocumentModel {
   ProcessingDocumentModel({
     required this.id,
     required this.title,
+    required this.created,
+    required this.added,
     this.correspondentId,
     required this.correspondentName,
     this.documentTypeId,
@@ -520,6 +550,8 @@ class ProcessingDocumentModel {
     return ProcessingDocumentModel(
       id: _asInt(json['id']) ?? 0,
       title: _asString(json['title']) ?? '',
+      created: _asString(json['created']) ?? '',
+      added: _asString(json['added']) ?? '',
       correspondentId: _asInt(json['correspondent_id']),
       correspondentName: _asString(json['correspondent_name']) ?? '',
       documentTypeId: _asInt(json['document_type_id']),
@@ -884,6 +916,12 @@ ProcessingStageProgress? _queueStageProgressFromKey(String key) {
         label: 'OCR / Text',
         status: 'pending',
       );
+    case 'created_date':
+      return const ProcessingStageProgress(
+        key: 'created_date',
+        label: 'Created Date',
+        status: 'pending',
+      );
     case 'correspondent':
       return const ProcessingStageProgress(
         key: 'correspondent',
@@ -900,6 +938,12 @@ ProcessingStageProgress? _queueStageProgressFromKey(String key) {
       return const ProcessingStageProgress(
         key: 'tags',
         label: 'Tags',
+        status: 'pending',
+      );
+    case 'title':
+      return const ProcessingStageProgress(
+        key: 'title',
+        label: 'Title',
         status: 'pending',
       );
     default:

@@ -319,6 +319,16 @@ class _DrawerBody extends StatelessWidget {
                   ),
                   const SizedBox(height: 20),
                   _buildSuggestionSection(
+                    title: 'Created Date',
+                    stage: result.createdDate,
+                    currentLabel: result.document?.created,
+                    selectedLabel: _payloadString(
+                      result.createdDate.payload,
+                      'created',
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  _buildSuggestionSection(
                     title: 'Correspondent',
                     stage: result.correspondent,
                     currentLabel: _documentEntityLabel(
@@ -353,6 +363,16 @@ class _DrawerBody extends StatelessWidget {
                   ),
                   const SizedBox(height: 20),
                   _buildTagSection(result),
+                  const SizedBox(height: 20),
+                  _buildSuggestionSection(
+                    title: 'Title',
+                    stage: result.title,
+                    currentLabel: result.document?.title,
+                    selectedLabel: _payloadString(
+                      result.title.payload,
+                      'title',
+                    ),
+                  ),
                   const SizedBox(height: 20),
                   _buildExtractionSection(result),
                   if (result.notes.isNotEmpty) ...[

@@ -131,6 +131,58 @@ Document source: %s
 Document text:
 %s`
 
+const createdDatePromptTemplate = `You are extracting the document creation date for paperless-ngx.
+Identify the date the document itself was created or issued, not the date it was added to paperless-ngx.
+
+Return strict JSON with exactly these keys:
+{
+	"created": "YYYY-MM-DD"|null,
+	"confidence": "high"|"medium"|"low",
+	"reasoning": string
+}
+
+Rules:
+- Use the document's own creation, issue, invoice, statement, or letter date if it is clearly supported by the text.
+- Do not use due dates, booking dates, debit dates, service periods, or payment dates unless the text clearly indicates that this is also the document's own date.
+- If no reliable single date can be determined, return null for created.
+- The created value must be an ISO date in the format YYYY-MM-DD when present.
+
+%s
+
+Valid example:
+{"created":"2026-03-15","confidence":"high","reasoning":"Das Schreiben ist auf den 15.03.2026 datiert."}
+
+Document source: %s
+
+Document text:
+%s`
+
+const titlePromptTemplate = `You are generating a document title for paperless-ngx.
+Suggest a concise, human-readable title that will help identify the document later.
+
+Return strict JSON with exactly these keys:
+{
+	"title": string,
+	"confidence": "high"|"medium"|"low",
+	"reasoning": string
+}
+
+Rules:
+- Prefer a concise title, usually 3 to 10 words.
+- Include the most identifying information available, such as issuer, document type, and month or date when clearly supported.
+- Do not include file extensions or generic prefixes like "Scan" unless they are truly part of the document identity.
+- If the current title is already appropriate, you may return the same title.
+
+%s
+
+Valid example:
+{"title":"Telekom Rechnung Maerz 2026","confidence":"high","reasoning":"Der Aussteller, der Dokumenttyp und der Monat sind klar erkennbar."}
+
+Current title or source name: %s
+
+Document text:
+%s`
+
 func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, correspondents []paperless.Correspondent, historicalDocuments []paperless.Document) (CorrespondentSuggestion, error) {
 	prompt := buildCorrespondentPrompt(documentName, documentText, correspondents, historicalDocuments)
 	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
@@ -156,6 +208,24 @@ func SuggestTags(ctx context.Context, ollamaURL string, model string, documentNa
 		return TagSuggestion{}, err
 	}
 	return ParseTagSuggestion(response, tags)
+}
+
+func SuggestCreatedDate(ctx context.Context, ollamaURL string, model string, documentName string, documentText string) (CreatedDateSuggestion, error) {
+	prompt := fmt.Sprintf(createdDatePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, documentName, documentText)
+	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
+	if err != nil {
+		return CreatedDateSuggestion{}, err
+	}
+	return ParseCreatedDateSuggestion(response)
+}
+
+func SuggestTitle(ctx context.Context, ollamaURL string, model string, documentName string, documentText string) (TitleSuggestion, error) {
+	prompt := fmt.Sprintf(titlePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, documentName, documentText)
+	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
+	if err != nil {
+		return TitleSuggestion{}, err
+	}
+	return ParseTitleSuggestion(response)
 }
 
 func buildEntityList[T paperless.NamedEntity](items []T, emptyLabel string) string {

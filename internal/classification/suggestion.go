@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"paperless-ai-ext/internal/paperless"
@@ -47,6 +48,18 @@ type TagSuggestion struct {
 	SuggestedNewTags []string `json:"suggested_new_tags"`
 	Confidence       string   `json:"confidence"`
 	Reasoning        string   `json:"reasoning"`
+}
+
+type CreatedDateSuggestion struct {
+	Created    *string `json:"created"`
+	Confidence string  `json:"confidence"`
+	Reasoning  string  `json:"reasoning"`
+}
+
+type TitleSuggestion struct {
+	Title      *string `json:"title"`
+	Confidence string  `json:"confidence"`
+	Reasoning  string  `json:"reasoning"`
 }
 
 func ExtractJSONObject(raw string) (string, error) {
@@ -346,6 +359,47 @@ func ParseTagSuggestion(raw string, tags []paperless.Tag) (TagSuggestion, error)
 	return normalized, nil
 }
 
+func ParseCreatedDateSuggestion(raw string) (CreatedDateSuggestion, error) {
+	var suggestion CreatedDateSuggestion
+	if err := parseSuggestion(raw, &suggestion); err != nil {
+		return CreatedDateSuggestion{}, err
+	}
+
+	if suggestion.Created == nil {
+		return CreatedDateSuggestion{}, errors.New("LLM did not suggest a document creation date")
+	}
+
+	trimmed := strings.TrimSpace(*suggestion.Created)
+	if trimmed == "" {
+		return CreatedDateSuggestion{}, errors.New("LLM did not suggest a document creation date")
+	}
+	if _, err := time.Parse("2006-01-02", trimmed); err != nil {
+		return CreatedDateSuggestion{}, fmt.Errorf("LLM suggested invalid document creation date %q", trimmed)
+	}
+
+	suggestion.Created = stringPointer(trimmed)
+	return suggestion, nil
+}
+
+func ParseTitleSuggestion(raw string) (TitleSuggestion, error) {
+	var suggestion TitleSuggestion
+	if err := parseSuggestion(raw, &suggestion); err != nil {
+		return TitleSuggestion{}, err
+	}
+
+	if suggestion.Title == nil {
+		return TitleSuggestion{}, errors.New("LLM did not suggest a document title")
+	}
+
+	trimmed := strings.TrimSpace(*suggestion.Title)
+	if trimmed == "" {
+		return TitleSuggestion{}, errors.New("LLM did not suggest a document title")
+	}
+
+	suggestion.Title = stringPointer(trimmed)
+	return suggestion, nil
+}
+
 func parseSuggestion(raw string, target any) error {
 	jsonObject, err := ExtractJSONObject(raw)
 	if err != nil {
@@ -361,6 +415,10 @@ func parseSuggestion(raw string, target any) error {
 	case *DocumentTypeSuggestion:
 		typed.Confidence = NormalizeConfidence(typed.Confidence)
 	case *TagSuggestion:
+		typed.Confidence = NormalizeConfidence(typed.Confidence)
+	case *CreatedDateSuggestion:
+		typed.Confidence = NormalizeConfidence(typed.Confidence)
+	case *TitleSuggestion:
 		typed.Confidence = NormalizeConfidence(typed.Confidence)
 	}
 

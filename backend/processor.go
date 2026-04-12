@@ -223,9 +223,11 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Bool("trigger_tag_present", plan.TriggerTagPresent).
 		Bool("force_ocr", plan.ForceOCR).
 		Bool("force_vision", plan.ForceVision).
+		Bool("process_created_date", plan.CreatedDate).
 		Bool("process_correspondent", plan.Correspondent).
 		Bool("process_document_type", plan.DocumentType).
 		Bool("process_document_tags", plan.DocumentTags).
+		Bool("process_title", plan.Title).
 		Msg("built processing plan")
 	if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
 		return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist initial progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
@@ -242,7 +244,7 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		return p.store.MarkQueueItemCompleted(ctx, item.ID, "Skipped processing because no actionable processing tags were present on the document.", result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel, item.StartedAtMS)
 	}
 
-	usesDefaultModel := plan.Correspondent || plan.DocumentType || plan.DocumentTags
+	usesDefaultModel := plan.CreatedDate || plan.Correspondent || plan.DocumentType || plan.DocumentTags || plan.Title
 	requiresModelForExtraction := plan.ForceVision || documentNeedsModelExtraction(document)
 	if (usesDefaultModel || requiresModelForExtraction) && strings.TrimSpace(cfg.LLMs.DefaultLLM) == "" {
 		return p.failQueueItem(ctx, logger, item, "default_llm must be configured for the requested processing stages", nil, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
@@ -311,7 +313,7 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Int("text_length", len(extraction.Text)).
 		Msg("completed extraction stage")
 
-	stageFailures := make([]string, 0, 3)
+	stageFailures := make([]string, 0, 5)
 	recordStageFailure := func(stageLabel string, cause error) error {
 		failureMessage := fmt.Sprintf("%s: %v", stageLabel, cause)
 		stageFailures = append(stageFailures, failureMessage)
@@ -439,6 +441,56 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		}
 	}
 
+	if plan.CreatedDate {
+		logger.Info().Msg("starting creation date suggestion stage")
+		result.CreatedDate = SuggestionStageResult{Status: stageStatusRunning, UsedModel: cfg.LLMs.DefaultLLM}
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist creation date progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
+		suggestion, err := classification.SuggestCreatedDate(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text)
+		if err != nil {
+			result.CreatedDate = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
+			if recordErr := recordStageFailure("creation date suggestion", err); recordErr != nil {
+				return nil, recordErr
+			}
+		} else {
+			result.CreatedDate = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, createdDateStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+			if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+				return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist creation date progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+			}
+			logger.Info().
+				Str("confidence", suggestion.Confidence).
+				Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
+				Str("created", pointerString(suggestion.Created)).
+				Msg("completed creation date suggestion stage")
+		}
+	}
+
+	if plan.Title {
+		logger.Info().Msg("starting title suggestion stage")
+		result.Title = SuggestionStageResult{Status: stageStatusRunning, UsedModel: cfg.LLMs.DefaultLLM}
+		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist title progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+		}
+		suggestion, err := classification.SuggestTitle(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text)
+		if err != nil {
+			result.Title = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
+			if recordErr := recordStageFailure("title suggestion", err); recordErr != nil {
+				return nil, recordErr
+			}
+		} else {
+			result.Title = suggestionStageResult(stageStatusCompleted, cfg.LLMs.DefaultLLM, titleStagePayload(suggestion), suggestion.Confidence, suggestion.Reasoning)
+			if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
+				return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist title progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
+			}
+			logger.Info().
+				Str("confidence", suggestion.Confidence).
+				Str("reasoning", truncateLogValue(suggestion.Reasoning, 240)).
+				Str("title", pointerString(suggestion.Title)).
+				Msg("completed title suggestion stage")
+		}
+	}
+
 	resultSummary := summarizeProcessingResult(result)
 	logger.Info().
 		Str("result_summary", resultSummary).
@@ -525,7 +577,39 @@ func (p *Processor) applyQueueItem(ctx context.Context, item *QueueItem, cfg Bac
 	}
 
 	patch := paperless.DocumentPatch{}
-	appliedParts := make([]string, 0, 4)
+	appliedParts := make([]string, 0, 6)
+
+	if result.CreatedDate.Status == stageStatusCompleted {
+		created, err := resolveAppliedCreatedDate(result.CreatedDate)
+		if err != nil {
+			applyErr := fmt.Errorf("resolve created-date suggestion: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+		if strings.TrimSpace(liveDocument.Created) != created {
+			patch.Created = stringPointer(created)
+			appliedParts = append(appliedParts, fmt.Sprintf("created date %q", created))
+		}
+	}
+
+	if result.Title.Status == stageStatusCompleted {
+		title, err := resolveAppliedTitle(result.Title)
+		if err != nil {
+			applyErr := fmt.Errorf("resolve title suggestion: %w", err)
+			failedItem, markErr := p.store.MarkQueueItemApplyFailed(ctx, item.ID, applyErr.Error())
+			if markErr != nil {
+				return nil, markErr
+			}
+			return failedItem, applyErr
+		}
+		if strings.TrimSpace(liveDocument.Title) != title {
+			patch.Title = stringPointer(title)
+			appliedParts = append(appliedParts, fmt.Sprintf("title %q", title))
+		}
+	}
 
 	if result.Correspondent.Status == stageStatusCompleted {
 		correspondents, err := client.ListCorrespondents(ctx)
@@ -613,7 +697,7 @@ func (p *Processor) applyQueueItem(ctx context.Context, item *QueueItem, cfg Bac
 		patch.TagIDs = finalTagIDs
 	}
 
-	if patch.CorrespondentID == nil && patch.DocumentTypeID == nil && len(patch.TagIDs) == 0 {
+	if patch.Title == nil && patch.Created == nil && patch.CorrespondentID == nil && patch.DocumentTypeID == nil && len(patch.TagIDs) == 0 {
 		summary := "Suggestions already matched the live Paperless document."
 		if len(appliedParts) > 0 {
 			summary = "Apply confirmed live Paperless metadata is already up to date."
@@ -690,9 +774,33 @@ func truncateLogValue(value string, maxLen int) string {
 }
 
 func hasCompletedSuggestion(result ProcessingResult) bool {
-	return result.Correspondent.Status == stageStatusCompleted ||
+	return result.CreatedDate.Status == stageStatusCompleted ||
+		result.Correspondent.Status == stageStatusCompleted ||
 		result.DocumentType.Status == stageStatusCompleted ||
-		result.Tags.Status == stageStatusCompleted
+		result.Tags.Status == stageStatusCompleted ||
+		result.Title.Status == stageStatusCompleted
+}
+
+func resolveAppliedCreatedDate(stage SuggestionStageResult) (string, error) {
+	var suggestion classification.CreatedDateSuggestion
+	if err := decodeSuggestionPayload(stage.Payload, &suggestion); err != nil {
+		return "", err
+	}
+	if suggestion.Created == nil || strings.TrimSpace(*suggestion.Created) == "" {
+		return "", errors.New("created-date suggestion did not contain an applyable value")
+	}
+	return strings.TrimSpace(*suggestion.Created), nil
+}
+
+func resolveAppliedTitle(stage SuggestionStageResult) (string, error) {
+	var suggestion classification.TitleSuggestion
+	if err := decodeSuggestionPayload(stage.Payload, &suggestion); err != nil {
+		return "", err
+	}
+	if suggestion.Title == nil || strings.TrimSpace(*suggestion.Title) == "" {
+		return "", errors.New("title suggestion did not contain an applyable value")
+	}
+	return strings.TrimSpace(*suggestion.Title), nil
 }
 
 func resolveAppliedCorrespondent(ctx context.Context, client *paperless.Client, correspondents []paperless.Correspondent, stage SuggestionStageResult) (*int64, string, error) {
@@ -791,6 +899,10 @@ func int64Pointer(value int64) *int64 {
 	return &value
 }
 
+func stringPointer(value string) *string {
+	return &value
+}
+
 func sameOptionalInt64(left *int64, right *int64) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -861,9 +973,11 @@ func processingStateTagNames(cfg ProcessConfig) map[string]struct{} {
 		cfg.ProcessTriggerTag,
 		cfg.ForceOCRTag,
 		cfg.ForceVisionTag,
+		cfg.ProcessCreatedDateTag,
 		cfg.ProcessCorrespondentTag,
 		cfg.ProcessDocumentTypeTag,
 		cfg.ProcessDocumentTagsTag,
+		cfg.ProcessTitleTag,
 	}
 
 	stateTagNames := make(map[string]struct{}, len(values))
@@ -911,9 +1025,12 @@ func processorDocumentName(document *paperless.Document, downloadedPath string) 
 }
 
 func summarizeProcessingResult(result ProcessingResult) string {
-	completed := make([]string, 0, 4)
+	completed := make([]string, 0, 6)
 	if result.Extraction.Status == stageStatusCompleted {
 		completed = append(completed, "text extraction")
+	}
+	if result.CreatedDate.Status == stageStatusCompleted {
+		completed = append(completed, "creation date suggestion")
 	}
 	if result.Correspondent.Status == stageStatusCompleted {
 		completed = append(completed, "correspondent suggestion")
@@ -923,6 +1040,9 @@ func summarizeProcessingResult(result ProcessingResult) string {
 	}
 	if result.Tags.Status == stageStatusCompleted {
 		completed = append(completed, "tag suggestion")
+	}
+	if result.Title.Status == stageStatusCompleted {
+		completed = append(completed, "title suggestion")
 	}
 	if len(completed) == 0 {
 		return "Processed queue item without any completed suggestion stages."
@@ -947,21 +1067,28 @@ func currentRunningStageLabel(result ProcessingResult) string {
 	switch {
 	case result.Extraction.Status == stageStatusRunning:
 		return "text extraction"
+	case result.CreatedDate.Status == stageStatusRunning:
+		return "creation date suggestion"
 	case result.Correspondent.Status == stageStatusRunning:
 		return "correspondent suggestion"
 	case result.DocumentType.Status == stageStatusRunning:
 		return "document type suggestion"
 	case result.Tags.Status == stageStatusRunning:
 		return "tag suggestion"
+	case result.Title.Status == stageStatusRunning:
+		return "title suggestion"
 	default:
 		return ""
 	}
 }
 
 func pendingStageLabels(result ProcessingResult) []string {
-	labels := make([]string, 0, 4)
+	labels := make([]string, 0, 6)
 	if result.Extraction.Status == stageStatusPending {
 		labels = append(labels, "text extraction")
+	}
+	if result.CreatedDate.Status == stageStatusPending {
+		labels = append(labels, "creation date suggestion")
 	}
 	if result.Correspondent.Status == stageStatusPending {
 		labels = append(labels, "correspondent suggestion")
@@ -971,6 +1098,9 @@ func pendingStageLabels(result ProcessingResult) []string {
 	}
 	if result.Tags.Status == stageStatusPending {
 		labels = append(labels, "tag suggestion")
+	}
+	if result.Title.Status == stageStatusPending {
+		labels = append(labels, "title suggestion")
 	}
 	return labels
 }
