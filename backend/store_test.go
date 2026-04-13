@@ -233,6 +233,49 @@ func TestCreateQueueItemWithRequestedStagesPersists(t *testing.T) {
 	}
 }
 
+func TestGetDocumentProcessHistoryReturnsNewestRunsFirst(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	firstDocumentID := int64(42)
+	secondDocumentID := int64(77)
+	firstItem, err := store.CreateQueueItem(t.Context(), &firstDocumentID, "Invoice April", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create first queue item: %v", err)
+	}
+	secondItem, err := store.CreateQueueItem(t.Context(), &firstDocumentID, "Invoice April", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create second queue item: %v", err)
+	}
+	if _, err := store.CreateQueueItem(t.Context(), &secondDocumentID, "Other document", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create unrelated queue item: %v", err)
+	}
+
+	history, err := store.GetDocumentProcessHistory(t.Context(), firstDocumentID, 10)
+	if err != nil {
+		t.Fatalf("get document process history: %v", err)
+	}
+	if history.DocumentID != firstDocumentID {
+		t.Fatalf("expected document id %d, got %d", firstDocumentID, history.DocumentID)
+	}
+	if history.DocumentTitle != "Invoice April" {
+		t.Fatalf("expected document title Invoice April, got %q", history.DocumentTitle)
+	}
+	if len(history.Items) != 2 {
+		t.Fatalf("expected 2 items in history, got %d", len(history.Items))
+	}
+	if history.Items[0].ID != secondItem.ID || history.Items[1].ID != firstItem.ID {
+		t.Fatalf("expected items ordered newest first, got ids [%d, %d]", history.Items[0].ID, history.Items[1].ID)
+	}
+}
+
 func TestMarkQueueItemAppliedPersistsMetadata(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
 	store, err := OpenStore(databasePath)

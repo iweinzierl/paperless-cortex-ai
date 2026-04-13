@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:webapp/theme.dart';
 import 'package:webapp/services/api_service.dart';
@@ -200,6 +201,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _selectedResultItem = null;
       });
     });
+  }
+
+  void _openDocumentOverview(int? documentId) {
+    if (documentId == null) {
+      return;
+    }
+    context.push('/documents/${documentId.toString()}/history');
   }
 
   QueueItem? _refreshSelectedItem(List<QueueItem> items, QueueItem? current) {
@@ -492,6 +500,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             item: _selectedResultItem,
             isOpen: _isResultDrawerOpen,
             onClose: _closeResultDrawer,
+            onOpenDocumentOverview: _selectedResultItem?.documentId != null
+                ? () => _openDocumentOverview(_selectedResultItem!.documentId)
+                : null,
             onApply: _selectedResultItem != null
                 ? () => _applyItem(_selectedResultItem!)
                 : null,
@@ -659,25 +670,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.only(left: 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Text(
-                          item.documentTitle,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: TailwindColors.onSurface,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.documentTitle,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: TailwindColors.onSurface,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                'Source: ${item.source}',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: TailwindColors.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ),
-                          overflow: TextOverflow.ellipsis,
                         ),
-                        Text(
-                          'Source: ${item.source}',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            color: TailwindColors.onSurfaceVariant,
+                        if (item.documentId != null)
+                          IconButton(
+                            onPressed: () =>
+                                _openDocumentOverview(item.documentId),
+                            icon: const Icon(
+                              Icons.history,
+                              size: 18,
+                              color: TailwindColors.onSurfaceVariant,
+                            ),
+                            tooltip: 'View document history',
+                            splashRadius: 18,
                           ),
-                        ),
                       ],
                     ),
                   ),

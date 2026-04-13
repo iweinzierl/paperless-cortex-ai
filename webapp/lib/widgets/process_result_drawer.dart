@@ -12,6 +12,7 @@ class ProcessResultDrawer extends StatelessWidget {
   final QueueItem? item;
   final bool isOpen;
   final VoidCallback onClose;
+  final VoidCallback? onOpenDocumentOverview;
   final VoidCallback? onRemove;
   final VoidCallback? onApply;
   final bool isRemoving;
@@ -23,6 +24,7 @@ class ProcessResultDrawer extends StatelessWidget {
     required this.item,
     required this.isOpen,
     required this.onClose,
+    this.onOpenDocumentOverview,
     this.onRemove,
     this.onApply,
     this.isRemoving = false,
@@ -144,6 +146,7 @@ class ProcessResultDrawer extends StatelessWidget {
                       _DrawerBody(
                         item: item!,
                         onClose: onClose,
+                        onOpenDocumentOverview: onOpenDocumentOverview,
                         onRemove: onRemove,
                         onApply: onApply,
                         isRemoving: isRemoving,
@@ -165,6 +168,7 @@ class ProcessResultDrawer extends StatelessWidget {
 class _DrawerBody extends StatelessWidget {
   final QueueItem item;
   final VoidCallback onClose;
+  final VoidCallback? onOpenDocumentOverview;
   final VoidCallback? onRemove;
   final VoidCallback? onApply;
   final bool isRemoving;
@@ -174,6 +178,7 @@ class _DrawerBody extends StatelessWidget {
   const _DrawerBody({
     required this.item,
     required this.onClose,
+    this.onOpenDocumentOverview,
     this.onRemove,
     this.onApply,
     required this.isRemoving,
@@ -227,6 +232,15 @@ class _DrawerBody extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (onOpenDocumentOverview != null &&
+                      item.documentId != null) ...[
+                    OutlinedButton.icon(
+                      onPressed: onOpenDocumentOverview,
+                      icon: const Icon(Icons.history, size: 18),
+                      label: const Text('Document History'),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   if (showApplySuggestions && onApply != null) ...[
                     FilledButton.icon(
                       onPressed: isApplying ? null : onApply,

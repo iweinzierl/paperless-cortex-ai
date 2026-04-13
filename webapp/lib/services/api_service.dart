@@ -152,6 +152,20 @@ class ApiService {
     return items.map((e) => QueueItem.fromJson(e)).toList();
   }
 
+  Future<DocumentProcessOverview> getDocumentProcessOverview(
+    int documentId, {
+    int limit = 100,
+  }) async {
+    final response = await http.get(
+      Uri.parse(
+        '${baseUrl}/documents/${documentId.toString()}/processes?limit=${limit.toString()}',
+      ),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+    return DocumentProcessOverview.fromJson(jsonDecode(response.body));
+  }
+
   Future<QueueItem> processQueueItem(int id) async {
     final response = await http.post(
       Uri.parse(baseUrl + '/queue/' + id.toString() + '/process'),

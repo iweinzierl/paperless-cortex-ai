@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:webapp/theme.dart';
 import 'package:webapp/services/api_service.dart';
@@ -341,6 +342,13 @@ class _QueueScreenState extends State<QueueScreen> {
     });
   }
 
+  void _openDocumentOverview(int? documentId) {
+    if (documentId == null) {
+      return;
+    }
+    context.push('/documents/${documentId.toString()}/history');
+  }
+
   QueueItem? _refreshSelectedItem(List<QueueItem> items, QueueItem? current) {
     if (current == null) {
       return null;
@@ -568,6 +576,10 @@ class _QueueScreenState extends State<QueueScreen> {
                   ),
                 ],
               ),
+              if (_activeItems.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                _buildProgressPanel(),
+              ],
               const SizedBox(height: 32),
 
               // Main Table Area
@@ -904,10 +916,6 @@ class _QueueScreenState extends State<QueueScreen> {
                   ],
                 ),
               ),
-              if (_activeItems.isNotEmpty) ...[
-                const SizedBox(height: 24),
-                _buildProgressPanel(),
-              ],
             ],
           ),
         ),
@@ -916,6 +924,9 @@ class _QueueScreenState extends State<QueueScreen> {
             item: _selectedResultItem,
             isOpen: _isResultDrawerOpen,
             onClose: _closeResultDrawer,
+            onOpenDocumentOverview: _selectedResultItem?.documentId != null
+                ? () => _openDocumentOverview(_selectedResultItem!.documentId)
+                : null,
             onRemove: _selectedResultItem != null
                 ? () => _removeItem(_selectedResultItem!)
                 : null,
@@ -1446,6 +1457,25 @@ class _QueueScreenState extends State<QueueScreen> {
                       onPressed: isRemoving
                           ? null
                           : () => _processItem(item.id),
+                    ),
+                  ),
+                if (item.documentId != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.history,
+                        size: 20,
+                        color: TailwindColors.onSurfaceVariant,
+                      ),
+                      tooltip: item.documentId != null
+                          ? 'View document history'
+                          : 'Document history unavailable',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: isRemoving || item.documentId == null
+                          ? null
+                          : () => _openDocumentOverview(item.documentId),
                     ),
                   ),
                 if (canOpenDetails)

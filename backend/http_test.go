@@ -500,6 +500,68 @@ func TestDeleteQueueItemRejectsProcessingItems(t *testing.T) {
 	}
 }
 
+func TestDocumentProcessHistoryEndpointReturnsDocumentRuns(t *testing.T) {
+	router, store := newWebhookTestRouter(t, "secret")
+
+	if err := store.CreateSession(t.Context(), Session{
+		Token:        "session-token",
+		Username:     "tester",
+		CreatedAtMS:  nowMS(),
+		ExpiresAtMS:  nowMS() + 60_000,
+		LastSeenAtMS: nowMS(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	documentID := int64(42)
+	otherDocumentID := int64(77)
+	firstItem, err := store.CreateQueueItem(t.Context(), &documentID, "Invoice April", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create first queue item: %v", err)
+	}
+	secondItem, err := store.CreateQueueItem(t.Context(), &documentID, "Invoice April", "paperless", "webhook", `{}`)
+	if err != nil {
+		t.Fatalf("create second queue item: %v", err)
+	}
+	if _, err := store.CreateQueueItem(t.Context(), &otherDocumentID, "Other document", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create unrelated queue item: %v", err)
+	}
+
+	response := performWebhookRequest(
+		t,
+		router,
+		http.MethodGet,
+		"/api/documents/42/processes?limit=5",
+		nil,
+		map[string]string{"Authorization": "Bearer session-token"},
+	)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload struct {
+		DocumentID    int64       `json:"document_id"`
+		DocumentTitle string      `json:"document_title"`
+		Items         []QueueItem `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode history response: %v", err)
+	}
+	if payload.DocumentID != documentID {
+		t.Fatalf("expected document id %d, got %d", documentID, payload.DocumentID)
+	}
+	if payload.DocumentTitle != "Invoice April" {
+		t.Fatalf("expected document title Invoice April, got %q", payload.DocumentTitle)
+	}
+	if len(payload.Items) != 2 {
+		t.Fatalf("expected 2 document items, got %d", len(payload.Items))
+	}
+	if payload.Items[0].ID != secondItem.ID || payload.Items[1].ID != firstItem.ID {
+		t.Fatalf("expected newest-first ordering, got ids [%d, %d]", payload.Items[0].ID, payload.Items[1].ID)
+	}
+}
+
 func TestApplyQueueItemAppliesSuggestionsAndCompletedTag(t *testing.T) {
 	patched := false
 	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

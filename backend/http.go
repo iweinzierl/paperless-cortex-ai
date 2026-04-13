@@ -128,6 +128,12 @@ type systemStatusResponse struct {
 	Ollama    dependencyStatusResponse `json:"ollama"`
 }
 
+type documentProcessHistoryResponse struct {
+	DocumentID    int64       `json:"document_id"`
+	DocumentTitle string      `json:"document_title"`
+	Items         []QueueItem `json:"items"`
+}
+
 func NewServer(store *Store, processor *Processor, logger zerolog.Logger, sharedSecret string) *Server {
 	return &Server{
 		store:        store,
@@ -157,6 +163,7 @@ func (s *Server) Router() *gin.Engine {
 	authenticated.GET("/config", s.handleGetConfig)
 	authenticated.PUT("/config", s.handlePutConfig)
 	authenticated.GET("/queue", s.handleListQueue)
+	authenticated.GET("/documents/:id/processes", s.handleDocumentProcessHistory)
 	authenticated.DELETE("/queue/:id", s.handleDeleteQueueItem)
 	authenticated.POST("/queue/:id/process", s.handleProcessQueueItem)
 	authenticated.POST("/queue/:id/apply", s.handleApplyQueueItem)
@@ -301,6 +308,40 @@ func (s *Server) handleListQueue(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (s *Server) handleDocumentProcessHistory(c *gin.Context) {
+	documentID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "document id must be numeric"})
+		return
+	}
+
+	limit := 100
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be a number"})
+			return
+		}
+		limit = parsedLimit
+	}
+
+	history, err := s.store.GetDocumentProcessHistory(c.Request.Context(), documentID, limit)
+	if errors.Is(err, errQueueItemNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "document process history not found"})
+		return
+	}
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, documentProcessHistoryResponse{
+		DocumentID:    history.DocumentID,
+		DocumentTitle: history.DocumentTitle,
+		Items:         history.Items,
+	})
 }
 
 func (s *Server) handleProcessQueueItem(c *gin.Context) {

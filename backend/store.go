@@ -73,6 +73,12 @@ type DashboardStats struct {
 	RecentRuns            []QueueItem `json:"recent_runs"`
 }
 
+type DocumentProcessHistory struct {
+	DocumentID    int64       `json:"document_id"`
+	DocumentTitle string      `json:"document_title"`
+	Items         []QueueItem `json:"items"`
+}
+
 func OpenStore(databasePath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
@@ -429,6 +435,49 @@ func (s *Store) ListQueueItems(ctx context.Context, status string, limit int) ([
 	}
 
 	return items, nil
+}
+
+func (s *Store) GetDocumentProcessHistory(ctx context.Context, documentID int64, limit int) (*DocumentProcessHistory, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, document_id, document_title, source, trigger_source, status, payload,
+		       requested_stages, requested_at_ms, started_at_ms, completed_at_ms, attempts, last_error,
+		       result_summary, result_payload, used_llm, used_vision_llm, processing_duration_ms,
+		       apply_status, applied_at_ms, apply_error, applied_summary
+		FROM queue_items
+		WHERE document_id = ?
+		ORDER BY requested_at_ms DESC, id DESC
+		LIMIT ?
+	`, documentID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list document process history: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]QueueItem, 0, limit)
+	for rows.Next() {
+		item, err := scanQueueItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan document process history item: %w", err)
+		}
+		items = append(items, *item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate document process history items: %w", err)
+	}
+	if len(items) == 0 {
+		return nil, errQueueItemNotFound
+	}
+
+	return &DocumentProcessHistory{
+		DocumentID:    documentID,
+		DocumentTitle: items[0].DocumentTitle,
+		Items:         items,
+	}, nil
 }
 
 func (s *Store) ClaimNextPendingQueueItem(ctx context.Context) (*QueueItem, error) {

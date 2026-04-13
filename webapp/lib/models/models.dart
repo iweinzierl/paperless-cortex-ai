@@ -719,6 +719,66 @@ class QueueItem {
   }
 }
 
+class DocumentProcessOverview {
+  final int documentId;
+  final String documentTitle;
+  final List<QueueItem> items;
+
+  const DocumentProcessOverview({
+    required this.documentId,
+    required this.documentTitle,
+    required this.items,
+  });
+
+  factory DocumentProcessOverview.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    List<QueueItem> items = [];
+    if (rawItems is List) {
+      items = rawItems.map((entry) => QueueItem.fromJson(entry)).toList();
+    }
+
+    return DocumentProcessOverview(
+      documentId: _asInt(json['document_id']) ?? 0,
+      documentTitle: _asString(json['document_title']) ?? 'Untitled',
+      items: items,
+    );
+  }
+
+  int get totalRuns => items.length;
+
+  int get completedRuns =>
+      items.where((item) => item.status == 'completed').length;
+
+  int get partiallyCompletedRuns =>
+      items.where((item) => item.status == 'partially_completed').length;
+
+  int get failedRuns => items.where((item) => item.status == 'failed').length;
+
+  int get activeRuns => items
+      .where((item) => item.status == 'processing' || item.status == 'pending')
+      .length;
+
+  List<String> get distinctLlms =>
+      _distinctNonEmpty(items.map((item) => item.usedLlm ?? ''));
+
+  List<String> get distinctVisionLlms =>
+      _distinctNonEmpty(items.map((item) => item.usedVisionLlm ?? ''));
+
+  static List<String> _distinctNonEmpty(Iterable<String> values) {
+    final ordered = <String>[];
+    final seen = <String>{};
+    for (final value in values) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty || seen.contains(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      ordered.add(trimmed);
+    }
+    return ordered;
+  }
+}
+
 class DashboardStats {
   final int queuedCount;
   final double averageProcessingMs;
