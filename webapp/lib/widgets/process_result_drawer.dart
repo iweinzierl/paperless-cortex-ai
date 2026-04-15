@@ -143,15 +143,17 @@ class ProcessResultDrawer extends StatelessWidget {
                           ),
                         ),
                       ),
-                      _DrawerBody(
-                        item: item!,
-                        onClose: onClose,
-                        onOpenDocumentOverview: onOpenDocumentOverview,
-                        onRemove: onRemove,
-                        onApply: onApply,
-                        isRemoving: isRemoving,
-                        isApplying: isApplying,
-                        showApplySuggestions: showApplySuggestions,
+                      Positioned.fill(
+                        child: _DrawerBody(
+                          item: item!,
+                          onClose: onClose,
+                          onOpenDocumentOverview: onOpenDocumentOverview,
+                          onRemove: onRemove,
+                          onApply: onApply,
+                          isRemoving: isRemoving,
+                          isApplying: isApplying,
+                          showApplySuggestions: showApplySuggestions,
+                        ),
                       ),
                     ],
                   ),
@@ -200,14 +202,14 @@ class _DrawerBody extends StatelessWidget {
               bottom: BorderSide(color: TailwindColors.surfaceContainerHigh),
             ),
           ),
-          child: Row(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
                       item.documentTitle,
                       style: const TextStyle(
                         fontSize: 22,
@@ -215,8 +217,41 @@ class _DrawerBody extends StatelessWidget {
                         color: TailwindColors.onSurface,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Wrap(
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (onRemove != null && item.canRemoveFromQueue)
+                        IconButton(
+                          onPressed: isRemoving ? null : onRemove,
+                          icon: isRemoving
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.delete_outline, size: 22),
+                          color: TailwindColors.error,
+                          tooltip: 'Remove from queue',
+                        ),
+                      IconButton(
+                        onPressed: onClose,
+                        icon: const Icon(Icons.close),
+                        color: TailwindColors.onSurfaceVariant,
+                        tooltip: 'Close',
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Flexible(
+                    child: Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -226,22 +261,18 @@ class _DrawerBody extends StatelessWidget {
                         _MetaPill(label: item.source.toUpperCase()),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
+                  ),
                   if (onOpenDocumentOverview != null &&
                       item.documentId != null) ...[
+                    const SizedBox(width: 8),
                     OutlinedButton.icon(
                       onPressed: onOpenDocumentOverview,
                       icon: const Icon(Icons.history, size: 18),
                       label: const Text('Document History'),
                     ),
-                    const SizedBox(width: 8),
                   ],
                   if (showApplySuggestions && onApply != null) ...[
+                    const SizedBox(width: 8),
                     FilledButton.icon(
                       onPressed: isApplying ? null : onApply,
                       icon: isApplying
@@ -262,27 +293,7 @@ class _DrawerBody extends StatelessWidget {
                         foregroundColor: TailwindColors.onPrimary,
                       ),
                     ),
-                    const SizedBox(width: 8),
                   ],
-                  if (onRemove != null && item.canRemoveFromQueue)
-                    IconButton(
-                      onPressed: isRemoving ? null : onRemove,
-                      icon: isRemoving
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.delete_outline, size: 22),
-                      color: TailwindColors.error,
-                      tooltip: 'Remove from queue',
-                    ),
-                  IconButton(
-                    onPressed: onClose,
-                    icon: const Icon(Icons.close),
-                    color: TailwindColors.onSurfaceVariant,
-                    tooltip: 'Close',
-                  ),
                 ],
               ),
             ],

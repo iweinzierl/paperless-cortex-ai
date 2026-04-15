@@ -403,14 +403,15 @@ class _LoginScreenState extends State<LoginScreen> {
                             ],
                           ),
                           const SizedBox(height: 16),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 16,
+                            runSpacing: 8,
                             children: [
                               _buildStatusIndicator(
                                 _statusColor(_systemStatus?.backend),
                                 _statusLabel('Backend', _systemStatus?.backend),
                               ),
-                              const SizedBox(width: 16),
                               _buildStatusIndicator(
                                 _statusColor(_systemStatus?.paperless),
                                 _statusLabel(
@@ -418,7 +419,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                   _systemStatus?.paperless,
                                 ),
                               ),
-                              const SizedBox(width: 16),
                               _buildStatusIndicator(
                                 _statusColor(_systemStatus?.ollama),
                                 _statusLabel('Ollama', _systemStatus?.ollama),
