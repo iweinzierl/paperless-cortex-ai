@@ -94,3 +94,60 @@ func TestChatTimeoutReadsEnvironmentAtCallTime(t *testing.T) {
 		t.Fatalf("expected 3 minute timeout, got %s", got)
 	}
 }
+
+func TestEmbedReturnsVector(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/embeddings" {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode request payload: %v", err)
+		}
+		if payload["model"] != "nomic-embed-text" {
+			t.Fatalf("unexpected model payload: %+v", payload["model"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"embedding":[0.1,0.2,0.3]}`))
+	}))
+	defer testServer.Close()
+
+	vector, err := Embed(t.Context(), testServer.URL, "nomic-embed-text", "hello world")
+	if err != nil {
+		t.Fatalf("embed request failed: %v", err)
+	}
+	if len(vector) != 3 {
+		t.Fatalf("expected vector length 3, got %d", len(vector))
+	}
+}
+
+func TestEmbedRejectsEmptyVectors(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/embeddings" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"embedding":[]}`))
+	}))
+	defer testServer.Close()
+
+	if _, err := Embed(t.Context(), testServer.URL, "nomic-embed-text", "hello"); err == nil {
+		t.Fatal("expected error for empty embedding vector")
+	}
+}
+
+func TestEmbeddingTimeoutUsesConfiguredSeconds(t *testing.T) {
+	t.Setenv("PAPERLESS_AIEXT_OLLAMA_EMBED_TIMEOUT_SECONDS", "120")
+	if got := embeddingTimeout(); got != 2*time.Minute {
+		t.Fatalf("expected configured embedding timeout, got %s", got)
+	}
+}

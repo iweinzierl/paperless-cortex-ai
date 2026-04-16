@@ -684,6 +684,133 @@ func TestProcessorUsesHistoricalDocumentsForCorrespondentSuggestion(t *testing.T
 	}
 }
 
+func TestProcessorInjectsSimilarDocumentEvidenceForDocumentTypeAndTags(t *testing.T) {
+	chatRequests := 0
+	embedRequests := 0
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/embeddings":
+			embedRequests++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"embedding":[0.9,0.1,0.3]}`))
+			return
+		case "/api/chat":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read ollama request: %v", err)
+			}
+			if writeImplicitSuggestionResponse(w, body) {
+				return
+			}
+			chatRequests++
+
+			payload := string(body)
+			if !strings.Contains(payload, "Similar library documents") {
+				t.Fatalf("expected similar document evidence in prompt, got %s", payload)
+			}
+			if !strings.Contains(payload, "document_type=Invoice") {
+				t.Fatalf("expected historical document type evidence in prompt, got %s", payload)
+			}
+			if !strings.Contains(payload, "tags=invoice, telecom") {
+				t.Fatalf("expected historical tag evidence in prompt, got %s", payload)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(payload, "Choose the best matching existing document type") {
+				_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"document_type_id\":7,\"document_type_name\":\"Invoice\",\"suggested_new_document_type\":null,\"confidence\":\"high\",\"reasoning\":\"Passt zu den aehnlichen Rechnungen in der Bibliothek.\"}"}}`))
+				return
+			}
+			if strings.Contains(payload, "Choose zero or more existing tags") {
+				_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"tag_ids\":[10,11],\"tag_names\":[\"invoice\",\"telecom\"],\"suggested_new_tags\":[],\"confidence\":\"high\",\"reasoning\":\"Die aehnlichen Dokumente tragen dieselben Tags.\"}"}}`))
+				return
+			}
+
+			t.Fatalf("unexpected chat request payload: %s", payload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ollamaServer.Close()
+
+	paperlessServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/tags/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":1,"name":"process"},{"id":2,"name":"document-type"},{"id":3,"name":"document-tags"},{"id":10,"name":"invoice"},{"id":11,"name":"telecom"}],"next":null}`))
+		case r.URL.Path == "/api/correspondents/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":12,"name":"Telekom"}],"next":null}`))
+		case r.URL.Path == "/api/document_types/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":5,"name":"Receipt"},{"id":7,"name":"Invoice"}],"next":null}`))
+		case r.URL.Path == "/api/documents/" && r.URL.Query().Get("ordering") == "-created":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"id":99,"title":"Telekom Rechnung April","original_file_name":"telekom-april.pdf","document_type":7,"correspondent":12,"tags":[10,11],"content":"Rechnung Telekom April 2026","created":"2026-04-05","modified":"2026-04-05T08:00:00Z"}],"next":null}`))
+		case r.URL.Path == "/api/documents/42/":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":42,"title":"Mai Rechnung","original_file_name":"mai-rechnung.pdf","document_type":5,"tags":[1,2,3],"modified":"2026-05-01T08:00:00Z"}`))
+		case r.URL.Path == "/api/documents/42/download/":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Disposition", `attachment; filename="mai-rechnung.pdf"`)
+			_, _ = w.Write([]byte("Aktuelle Telekom Rechnung fuer Mai 2026"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer paperlessServer.Close()
+
+	processor, store := newProcessorTestHarness(t)
+	saveProcessorTestConfig(t, store, BackendConfig{
+		Engine: EngineConfig{ProcessingMode: ProcessingModeManual, ProcessingIntervalSeconds: 30},
+		Process: ProcessConfig{
+			ProcessTriggerTag:      "process",
+			ProcessDocumentTypeTag: "document-type",
+			ProcessDocumentTagsTag: "document-tags",
+		},
+		Paperless: PaperlessConfig{PaperlessURL: paperlessServer.URL, PaperlessToken: "token"},
+		LLMs: LLMConfig{
+			OllamaURL:  ollamaServer.URL,
+			DefaultLLM: "llama3.2",
+			VisionLLM:  "llava",
+			Embeddings: EmbeddingsConfig{
+				Enabled:                 true,
+				Model:                   "nomic-embed-text",
+				SyncIntervalSeconds:     120,
+				HistoricalDocumentLimit: 50,
+				TopK:                    5,
+				SimilarityThreshold:     0.1,
+				MaxDocumentsPerRun:      10,
+			},
+		},
+	})
+
+	documentID := int64(42)
+	if _, err := store.CreateQueueItem(t.Context(), &documentID, "Mai Rechnung", "paperless", "webhook", `{}`); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+
+	item, err := processor.ProcessNext(t.Context())
+	if err != nil {
+		t.Fatalf("process next queue item: %v", err)
+	}
+	if item.Status != queueItemStatusCompleted {
+		t.Fatalf("expected completed status, got %q", item.Status)
+	}
+	if chatRequests != 2 {
+		t.Fatalf("expected 2 chat requests for document type and tags, got %d", chatRequests)
+	}
+	if embedRequests < 2 {
+		t.Fatalf("expected at least 2 embedding requests (query + historical), got %d", embedRequests)
+	}
+
+	if !strings.Contains(item.ResultPayload, `"document_type_id":7`) {
+		t.Fatalf("expected document type suggestion in payload, got %s", item.ResultPayload)
+	}
+	if !strings.Contains(item.ResultPayload, `"tag_ids":[10,11]`) {
+		t.Fatalf("expected tag suggestion in payload, got %s", item.ResultPayload)
+	}
+}
+
 func TestProcessorContinuesAfterSuggestionStageFailure(t *testing.T) {
 	ollamaRequests := 0
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

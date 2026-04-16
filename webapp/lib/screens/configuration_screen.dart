@@ -32,13 +32,22 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
   final _compController = TextEditingController();
 
   final _ollamaUrlController = TextEditingController();
+  final _embeddingSyncIntervalController = TextEditingController();
+  final _embeddingHistoricalLimitController = TextEditingController();
+  final _embeddingTopKController = TextEditingController();
+  final _embeddingSimilarityThresholdController = TextEditingController();
+  final _embeddingMaxDocumentsPerRunController = TextEditingController();
 
   String _processingMode = 'manual';
   String _defaultLlm = '';
   String _visionLlm = '';
+  String _embeddingModel = '';
+  bool _embeddingsEnabled = false;
   List<String> _availableModels = [];
   List<DocumentTag> _availableTags = [];
   bool _ollamaHealthy = false;
+  EmbeddingIndexStats? _embeddingStats;
+  bool _reindexing = false;
 
   @override
   void initState() {
@@ -103,9 +112,36 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
           _visionLlm = config.llms.visionLlm.isNotEmpty
               ? config.llms.visionLlm
               : (availableMods.isNotEmpty ? availableMods.first : '');
+          _embeddingsEnabled = config.llms.embeddings.enabled;
+          _embeddingModel = config.llms.embeddings.model.isNotEmpty
+              ? config.llms.embeddings.model
+              : (availableMods.isNotEmpty ? availableMods.first : '');
+          _embeddingSyncIntervalController.text = config
+              .llms
+              .embeddings
+              .syncIntervalSeconds
+              .toString();
+          _embeddingHistoricalLimitController.text = config
+              .llms
+              .embeddings
+              .historicalDocumentLimit
+              .toString();
+          _embeddingTopKController.text = config.llms.embeddings.topK
+              .toString();
+          _embeddingSimilarityThresholdController.text = config
+              .llms
+              .embeddings
+              .similarityThreshold
+              .toString();
+          _embeddingMaxDocumentsPerRunController.text = config
+              .llms
+              .embeddings
+              .maxDocumentsPerRun
+              .toString();
 
           _isLoading = false;
         });
+        _loadEmbeddingStats();
       }
     } catch (e) {
       if (mounted) {
@@ -151,6 +187,20 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
           ollamaUrl: _ollamaUrlController.text,
           defaultLlm: _defaultLlm,
           visionLlm: _visionLlm,
+          embeddings: EmbeddingsConfig(
+            enabled: _embeddingsEnabled,
+            model: _embeddingModel,
+            syncIntervalSeconds:
+                int.tryParse(_embeddingSyncIntervalController.text) ?? 120,
+            historicalDocumentLimit:
+                int.tryParse(_embeddingHistoricalLimitController.text) ?? 200,
+            topK: int.tryParse(_embeddingTopKController.text) ?? 6,
+            similarityThreshold:
+                double.tryParse(_embeddingSimilarityThresholdController.text) ??
+                0.35,
+            maxDocumentsPerRun:
+                int.tryParse(_embeddingMaxDocumentsPerRunController.text) ?? 40,
+          ),
         ),
       );
 
@@ -160,6 +210,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
           _successMsg = 'Configuration saved successfully.';
           _isLoading = false;
         });
+        _loadEmbeddingStats();
       }
     } catch (e) {
       if (mounted) {
@@ -169,6 +220,67 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
         });
       }
     }
+  }
+
+  Future<void> _loadEmbeddingStats() async {
+    try {
+      final api = context.read<ApiService>();
+      final stats = await api.getEmbeddingStats();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _embeddingStats = stats;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _embeddingStats = null;
+      });
+    }
+  }
+
+  Future<void> _triggerReindex() async {
+    setState(() {
+      _reindexing = true;
+      _error = null;
+      _successMsg = null;
+    });
+
+    try {
+      final api = context.read<ApiService>();
+      final response = await api.triggerEmbeddingReindex();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _successMsg = response.status == 'reindex_triggered'
+            ? 'Embedding index rebuild triggered.'
+            : 'Embedding reindex response: ${response.status}';
+        _reindexing = false;
+      });
+      await _loadEmbeddingStats();
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = 'Failed to trigger embedding reindex: $e';
+        _reindexing = false;
+      });
+    }
+  }
+
+  String _formatLastSyncTime(int timestampMs) {
+    if (timestampMs <= 0) {
+      return 'Never synced';
+    }
+
+    return DateTime.fromMillisecondsSinceEpoch(
+      timestampMs,
+    ).toLocal().toString();
   }
 
   @override
@@ -402,6 +514,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                             children: [
                               Expanded(
                                 child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     _buildInnerField(
                                       'ENDPOINT URL',
@@ -460,6 +573,254 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
                                     ),
                                   ],
                                 ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: TailwindColors.surfaceContainerLow,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: TailwindColors.outlineVariant.withValues(
+                                alpha: 0.2,
+                              ),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'EMBEDDINGS RETRIEVAL',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w900,
+                                            color: TailwindColors.primary,
+                                            letterSpacing: 1.2,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        const Text(
+                                          'Use an Ollama embedding model to retrieve similar historical documents before suggestion prompts are built.',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color:
+                                                TailwindColors.onSurfaceVariant,
+                                            height: 1.45,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 24),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Text(
+                                        'Enabled',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: TailwindColors.onSurface,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Switch(
+                                        value: _embeddingsEnabled,
+                                        activeThumbColor:
+                                            TailwindColors.onPrimary,
+                                        activeTrackColor:
+                                            TailwindColors.primary,
+                                        onChanged: (value) {
+                                          setState(() {
+                                            _embeddingsEnabled = value;
+                                          });
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 20),
+                              _buildInnerDropdown(
+                                'EMBEDDING MODEL',
+                                _availableModels,
+                                _embeddingModel,
+                                (value) {
+                                  setState(() {
+                                    _embeddingModel = value ?? '';
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Use an embedding model such as nomic-embed-text. Do not point this at a chat model.',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: TailwindColors.outline,
+                                  height: 1.4,
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: _buildInnerField(
+                                      'SYNC INTERVAL',
+                                      _embeddingSyncIntervalController,
+                                      hint:
+                                          'Seconds between background index refreshes. Minimum is 15.',
+                                      isNumber: true,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 20),
+                                  Expanded(
+                                    child: _buildInnerField(
+                                      'HISTORY LIMIT',
+                                      _embeddingHistoricalLimitController,
+                                      hint:
+                                          'How many recent Paperless documents are eligible for indexing.',
+                                      isNumber: true,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 20),
+                                  Expanded(
+                                    child: _buildInnerField(
+                                      'TOP K',
+                                      _embeddingTopKController,
+                                      hint:
+                                          'Maximum similar documents injected into prompts.',
+                                      isNumber: true,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 20),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: _buildInnerField(
+                                      'SIMILARITY THRESHOLD',
+                                      _embeddingSimilarityThresholdController,
+                                      hint:
+                                          'Cosine similarity cutoff from 0.0 to 1.0. Higher values are stricter.',
+                                      isNumber: true,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 20),
+                                  Expanded(
+                                    child: _buildInnerField(
+                                      'MAX DOCS PER RUN',
+                                      _embeddingMaxDocumentsPerRunController,
+                                      hint:
+                                          'Caps how many stale embeddings are regenerated in one sync pass.',
+                                      isNumber: true,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 20),
+                                  Expanded(
+                                    child: Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: TailwindColors
+                                            .surfaceContainerLowest,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'INDEX STATUS',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w900,
+                                              color: TailwindColors.primary,
+                                              letterSpacing: 1.0,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            _embeddingStats == null
+                                                ? 'Status unavailable'
+                                                : (_embeddingStats!.enabled
+                                                      ? 'Enabled in backend'
+                                                      : 'Disabled in backend'),
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                              color: TailwindColors.onSurface,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Indexed documents: ${_embeddingStats?.indexedDocCount ?? 0}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: TailwindColors
+                                                  .onSurfaceVariant,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Last sync: ${_formatLastSyncTime(_embeddingStats?.lastSyncTimeMs ?? 0)}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: TailwindColors
+                                                  .onSurfaceVariant,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Wrap(
+                                            spacing: 12,
+                                            runSpacing: 12,
+                                            children: [
+                                              OutlinedButton.icon(
+                                                onPressed: _loadEmbeddingStats,
+                                                icon: const Icon(Icons.sync),
+                                                label: const Text('Refresh'),
+                                              ),
+                                              FilledButton.icon(
+                                                onPressed: _reindexing
+                                                    ? null
+                                                    : _triggerReindex,
+                                                icon: _reindexing
+                                                    ? const SizedBox(
+                                                        width: 14,
+                                                        height: 14,
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                              strokeWidth: 2,
+                                                              color:
+                                                                  TailwindColors
+                                                                      .onPrimary,
+                                                            ),
+                                                      )
+                                                    : const Icon(Icons.refresh),
+                                                label: Text(
+                                                  _reindexing
+                                                      ? 'Rebuilding...'
+                                                      : 'Rebuild Index',
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -834,7 +1195,12 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
     );
   }
 
-  Widget _buildInnerField(String label, TextEditingController controller) {
+  Widget _buildInnerField(
+    String label,
+    TextEditingController controller, {
+    String? hint,
+    bool isNumber = false,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -850,6 +1216,7 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
         const SizedBox(height: 8),
         TextField(
           controller: controller,
+          keyboardType: isNumber ? TextInputType.number : TextInputType.text,
           style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
           decoration: InputDecoration(
             filled: true,
@@ -864,6 +1231,18 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
             ),
           ),
         ),
+        if (hint != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              hint,
+              style: const TextStyle(
+                fontSize: 11,
+                color: TailwindColors.outline,
+                height: 1.35,
+              ),
+            ),
+          ),
       ],
     );
   }

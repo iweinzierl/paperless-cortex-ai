@@ -276,6 +276,60 @@ func TestGetDocumentProcessHistoryReturnsNewestRunsFirst(t *testing.T) {
 	}
 }
 
+func TestDocumentEmbeddingRoundtrip(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
+	store, err := OpenStore(databasePath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.Remove(databasePath)
+	})
+
+	record := DocumentEmbeddingRecord{
+		DocumentID:        42,
+		Title:             "Invoice April 2026",
+		OriginalFileName:  "invoice-april.pdf",
+		Created:           "2026-04-15",
+		SourceModified:    "2026-04-15T10:00:00Z",
+		CorrespondentName: "Telekom",
+		DocumentTypeName:  "Invoice",
+		TagNames:          []string{"invoice", "telecom"},
+		Snippet:           "Telekom Rechnung fuer April 2026",
+		Embedding:         []float64{0.1, 0.2, 0.3},
+	}
+
+	if err := store.UpsertDocumentEmbedding(t.Context(), record); err != nil {
+		t.Fatalf("upsert document embedding: %v", err)
+	}
+
+	stored, err := store.GetDocumentEmbedding(t.Context(), 42)
+	if err != nil {
+		t.Fatalf("get document embedding: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("expected stored embedding record")
+	}
+	if stored.Title != record.Title {
+		t.Fatalf("expected title %q, got %q", record.Title, stored.Title)
+	}
+	if len(stored.Embedding) != 3 {
+		t.Fatalf("expected 3 embedding values, got %d", len(stored.Embedding))
+	}
+	if strings.Join(stored.TagNames, ",") != "invoice,telecom" {
+		t.Fatalf("unexpected tag names: %+v", stored.TagNames)
+	}
+
+	items, err := store.ListDocumentEmbeddings(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("list document embeddings: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 embedding record, got %d", len(items))
+	}
+}
+
 func TestMarkQueueItemAppliedPersistsMetadata(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "paperless-aiext-store-test.db")
 	store, err := OpenStore(databasePath)

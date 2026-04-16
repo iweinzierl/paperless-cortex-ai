@@ -79,6 +79,20 @@ type DocumentProcessHistory struct {
 	Items         []QueueItem `json:"items"`
 }
 
+type DocumentEmbeddingRecord struct {
+	DocumentID        int64     `json:"document_id"`
+	Title             string    `json:"title"`
+	OriginalFileName  string    `json:"original_file_name"`
+	Created           string    `json:"created"`
+	SourceModified    string    `json:"source_modified"`
+	CorrespondentName string    `json:"correspondent_name"`
+	DocumentTypeName  string    `json:"document_type_name"`
+	TagNames          []string  `json:"tag_names"`
+	Snippet           string    `json:"snippet"`
+	Embedding         []float64 `json:"embedding"`
+	UpdatedAtMS       int64     `json:"updated_at_ms"`
+}
+
 func OpenStore(databasePath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
@@ -157,8 +171,22 @@ func (s *Store) migrate(ctx context.Context) error {
 			used_vision_llm TEXT NOT NULL DEFAULT '',
 			processing_duration_ms INTEGER
 		)`,
+		`CREATE TABLE IF NOT EXISTS document_embeddings (
+			document_id INTEGER PRIMARY KEY,
+			title TEXT NOT NULL DEFAULT '',
+			original_file_name TEXT NOT NULL DEFAULT '',
+			created TEXT NOT NULL DEFAULT '',
+			source_modified TEXT NOT NULL DEFAULT '',
+			correspondent_name TEXT NOT NULL DEFAULT '',
+			document_type_name TEXT NOT NULL DEFAULT '',
+			tag_names_json TEXT NOT NULL DEFAULT '[]',
+			snippet TEXT NOT NULL DEFAULT '',
+			embedding_json TEXT NOT NULL,
+			updated_at_ms INTEGER NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_queue_items_status_requested_at ON queue_items(status, requested_at_ms)`,
 		`CREATE INDEX IF NOT EXISTS idx_queue_items_document_id_status ON queue_items(document_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_document_embeddings_updated_at ON document_embeddings(updated_at_ms DESC)`,
 	}
 
 	for _, statement := range statements {
@@ -811,6 +839,123 @@ func (s *Store) listRecentRuns(ctx context.Context, limit int) ([]QueueItem, err
 	return items, nil
 }
 
+func (s *Store) UpsertDocumentEmbedding(ctx context.Context, record DocumentEmbeddingRecord) error {
+	tagNamesJSON, err := marshalStringList(record.TagNames)
+	if err != nil {
+		return fmt.Errorf("marshal embedding tag names: %w", err)
+	}
+	embeddingJSON, err := json.Marshal(record.Embedding)
+	if err != nil {
+		return fmt.Errorf("marshal embedding vector: %w", err)
+	}
+	updatedAtMS := nowMS()
+
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO document_embeddings(
+			document_id, title, original_file_name, created, source_modified,
+			correspondent_name, document_type_name, tag_names_json, snippet, embedding_json, updated_at_ms
+		)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(document_id) DO UPDATE SET
+			title = excluded.title,
+			original_file_name = excluded.original_file_name,
+			created = excluded.created,
+			source_modified = excluded.source_modified,
+			correspondent_name = excluded.correspondent_name,
+			document_type_name = excluded.document_type_name,
+			tag_names_json = excluded.tag_names_json,
+			snippet = excluded.snippet,
+			embedding_json = excluded.embedding_json,
+			updated_at_ms = excluded.updated_at_ms
+	`,
+		record.DocumentID,
+		strings.TrimSpace(record.Title),
+		strings.TrimSpace(record.OriginalFileName),
+		strings.TrimSpace(record.Created),
+		strings.TrimSpace(record.SourceModified),
+		strings.TrimSpace(record.CorrespondentName),
+		strings.TrimSpace(record.DocumentTypeName),
+		tagNamesJSON,
+		strings.TrimSpace(record.Snippet),
+		string(embeddingJSON),
+		updatedAtMS,
+	); err != nil {
+		return fmt.Errorf("upsert document embedding: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) GetDocumentEmbedding(ctx context.Context, documentID int64) (*DocumentEmbeddingRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT document_id, title, original_file_name, created, source_modified,
+		       correspondent_name, document_type_name, tag_names_json, snippet, embedding_json, updated_at_ms
+		FROM document_embeddings
+		WHERE document_id = ?
+	`, documentID)
+
+	record, err := scanDocumentEmbeddingRecord(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get document embedding: %w", err)
+	}
+
+	return record, nil
+}
+
+func (s *Store) ListDocumentEmbeddings(ctx context.Context, limit int) ([]DocumentEmbeddingRecord, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 500
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT document_id, title, original_file_name, created, source_modified,
+		       correspondent_name, document_type_name, tag_names_json, snippet, embedding_json, updated_at_ms
+		FROM document_embeddings
+		ORDER BY updated_at_ms DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list document embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]DocumentEmbeddingRecord, 0, limit)
+	for rows.Next() {
+		record, err := scanDocumentEmbeddingRecord(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan document embedding record: %w", err)
+		}
+		records = append(records, *record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate document embeddings: %w", err)
+	}
+
+	return records, nil
+}
+
+func (s *Store) GetEmbeddingIndexStats(ctx context.Context) (indexedCount int, lastSyncTimeMS int64, err error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), MAX(updated_at_ms) FROM document_embeddings
+	`)
+	if err := row.Scan(&indexedCount, &lastSyncTimeMS); err != nil {
+		return 0, 0, fmt.Errorf("get embedding index stats: %w", err)
+	}
+	return indexedCount, lastSyncTimeMS, nil
+}
+
+func (s *Store) ClearAllEmbeddings(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM document_embeddings`)
+	if err != nil {
+		return fmt.Errorf("clear all embeddings: %w", err)
+	}
+	return nil
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -875,6 +1020,41 @@ func scanQueueItem(row scanner) (*QueueItem, error) {
 	}
 
 	return &item, nil
+}
+
+func scanDocumentEmbeddingRecord(row scanner) (*DocumentEmbeddingRecord, error) {
+	var record DocumentEmbeddingRecord
+	var tagNamesJSON string
+	var embeddingJSON string
+
+	err := row.Scan(
+		&record.DocumentID,
+		&record.Title,
+		&record.OriginalFileName,
+		&record.Created,
+		&record.SourceModified,
+		&record.CorrespondentName,
+		&record.DocumentTypeName,
+		&tagNamesJSON,
+		&record.Snippet,
+		&embeddingJSON,
+		&record.UpdatedAtMS,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	tagNames, err := unmarshalStringList(tagNamesJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode embedding tag names: %w", err)
+	}
+	record.TagNames = tagNames
+
+	if err := json.Unmarshal([]byte(strings.TrimSpace(embeddingJSON)), &record.Embedding); err != nil {
+		return nil, fmt.Errorf("decode embedding vector: %w", err)
+	}
+
+	return &record, nil
 }
 
 func marshalStringList(values []string) (string, error) {

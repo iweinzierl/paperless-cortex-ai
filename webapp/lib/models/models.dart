@@ -204,11 +204,13 @@ class LLMConfig {
   final String ollamaUrl;
   final String defaultLlm;
   final String visionLlm;
+  final EmbeddingsConfig embeddings;
 
   LLMConfig({
     required this.ollamaUrl,
     required this.defaultLlm,
     required this.visionLlm,
+    required this.embeddings,
   });
 
   factory LLMConfig.fromJson(Map<String, dynamic> json) {
@@ -216,6 +218,7 @@ class LLMConfig {
       ollamaUrl: _asString(json['ollama_url']) ?? '',
       defaultLlm: _asString(json['default_llm']) ?? '',
       visionLlm: _asString(json['vision_llm']) ?? '',
+      embeddings: EmbeddingsConfig.fromJson(_asMap(json['embeddings']) ?? {}),
     );
   }
 
@@ -224,7 +227,89 @@ class LLMConfig {
       'ollama_url': ollamaUrl,
       'default_llm': defaultLlm,
       'vision_llm': visionLlm,
+      'embeddings': embeddings.toJson(),
     };
+  }
+}
+
+class EmbeddingsConfig {
+  final bool enabled;
+  final String model;
+  final int syncIntervalSeconds;
+  final int historicalDocumentLimit;
+  final int topK;
+  final double similarityThreshold;
+  final int maxDocumentsPerRun;
+
+  EmbeddingsConfig({
+    required this.enabled,
+    required this.model,
+    required this.syncIntervalSeconds,
+    required this.historicalDocumentLimit,
+    required this.topK,
+    required this.similarityThreshold,
+    required this.maxDocumentsPerRun,
+  });
+
+  factory EmbeddingsConfig.fromJson(Map<String, dynamic> json) {
+    return EmbeddingsConfig(
+      enabled: json['enabled'] == true,
+      model: _asString(json['model']) ?? '',
+      syncIntervalSeconds: _asInt(json['sync_interval_seconds']) ?? 120,
+      historicalDocumentLimit: _asInt(json['historical_document_limit']) ?? 200,
+      topK: _asInt(json['top_k']) ?? 6,
+      similarityThreshold: _asDouble(json['similarity_threshold']) ?? 0.35,
+      maxDocumentsPerRun: _asInt(json['max_documents_per_run']) ?? 40,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'enabled': enabled,
+      'model': model,
+      'sync_interval_seconds': syncIntervalSeconds,
+      'historical_document_limit': historicalDocumentLimit,
+      'top_k': topK,
+      'similarity_threshold': similarityThreshold,
+      'max_documents_per_run': maxDocumentsPerRun,
+    };
+  }
+}
+
+class EmbeddingIndexStats {
+  final bool enabled;
+  final int indexedDocCount;
+  final int lastSyncTimeMs;
+
+  EmbeddingIndexStats({
+    required this.enabled,
+    required this.indexedDocCount,
+    required this.lastSyncTimeMs,
+  });
+
+  factory EmbeddingIndexStats.fromJson(Map<String, dynamic> json) {
+    return EmbeddingIndexStats(
+      enabled: json['enabled'] == true,
+      indexedDocCount: _asInt(json['indexed_doc_count']) ?? 0,
+      lastSyncTimeMs: _asInt(json['last_sync_time_ms']) ?? 0,
+    );
+  }
+}
+
+class EmbeddingReindexResponse {
+  final String status;
+  final String? error;
+
+  EmbeddingReindexResponse({
+    required this.status,
+    this.error,
+  });
+
+  factory EmbeddingReindexResponse.fromJson(Map<String, dynamic> json) {
+    return EmbeddingReindexResponse(
+      status: _asString(json['status']) ?? 'unknown',
+      error: _asString(json['error']),
+    );
   }
 }
 

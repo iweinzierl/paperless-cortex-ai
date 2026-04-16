@@ -19,6 +19,7 @@ import (
 
 type Processor struct {
 	store            *Store
+	retrieval        *RetrievalService
 	logger           zerolog.Logger
 	waitForNextCycle func(context.Context, time.Duration) bool
 }
@@ -29,9 +30,14 @@ var errQueueItemAlreadyApplied = errors.New("queue item suggestions were already
 func NewProcessor(store *Store, logger zerolog.Logger) *Processor {
 	return &Processor{
 		store:            store,
+		retrieval:        NewRetrievalService(store),
 		logger:           logger,
 		waitForNextCycle: waitForNextCycle,
 	}
+}
+
+func (p *Processor) GetRetrievalService() *RetrievalService {
+	return p.retrieval
 }
 
 func (p *Processor) Start(ctx context.Context) {
@@ -55,6 +61,8 @@ func (p *Processor) Start(ctx context.Context) {
 			p.drainAutomaticQueue(ctx)
 		}
 	}()
+
+	go p.runEmbeddingIndexer(ctx)
 }
 
 func (p *Processor) loadProcessingWaitInterval(ctx context.Context) time.Duration {
@@ -65,6 +73,61 @@ func (p *Processor) loadProcessingWaitInterval(ctx context.Context) time.Duratio
 	}
 
 	return processingWaitInterval(cfg)
+}
+
+func (p *Processor) runEmbeddingIndexer(ctx context.Context) {
+	for {
+		waitInterval := p.loadEmbeddingSyncWaitInterval(ctx)
+		if !p.waitForNextCycle(ctx, waitInterval) {
+			return
+		}
+
+		cfg, err := p.store.LoadConfig(ctx)
+		if err != nil {
+			p.logger.Error().Err(err).Msg("failed to load backend config for embedding sync loop")
+			continue
+		}
+		if !cfg.LLMs.Embeddings.Enabled {
+			continue
+		}
+		if strings.TrimSpace(cfg.Paperless.PaperlessURL) == "" || strings.TrimSpace(cfg.Paperless.PaperlessToken) == "" {
+			continue
+		}
+
+		client := paperless.NewClient(cfg.Paperless.PaperlessURL, cfg.Paperless.PaperlessToken)
+		tags, err := client.ListTags(ctx)
+		if err != nil {
+			p.logger.Warn().Err(err).Msg("embedding sync skipped because tags could not be loaded")
+			continue
+		}
+		correspondents, err := client.ListCorrespondents(ctx)
+		if err != nil {
+			p.logger.Warn().Err(err).Msg("embedding sync skipped because correspondents could not be loaded")
+			continue
+		}
+		documentTypes, err := client.ListDocumentTypes(ctx)
+		if err != nil {
+			p.logger.Warn().Err(err).Msg("embedding sync skipped because document types could not be loaded")
+			continue
+		}
+
+		indexedCount, consideredCount, err := p.retrieval.SyncEmbeddings(ctx, cfg, client, entityNameMap(correspondents), entityNameMap(documentTypes), entityNameMap(tags))
+		if err != nil {
+			p.logger.Warn().Err(err).Msg("embedding sync failed")
+			continue
+		}
+		p.logger.Info().Int("indexed_documents", indexedCount).Int("considered_documents", consideredCount).Msg("embedding sync completed")
+	}
+}
+
+func (p *Processor) loadEmbeddingSyncWaitInterval(ctx context.Context) time.Duration {
+	cfg, err := p.store.LoadConfig(ctx)
+	if err != nil {
+		p.logger.Error().Err(err).Msg("failed to load backend config for embedding sync wait interval")
+		return 60 * time.Second
+	}
+
+	return time.Duration(cfg.LLMs.Embeddings.SyncIntervalSeconds) * time.Second
 }
 
 func (p *Processor) drainAutomaticQueue(ctx context.Context) {
@@ -313,6 +376,34 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		Int("text_length", len(extraction.Text)).
 		Msg("completed extraction stage")
 
+	var similarDocuments []SimilarDocument
+	if plan.Correspondent || plan.DocumentType || plan.DocumentTags {
+		var correspondentsByID map[int64]string
+		var documentTypesByID map[int64]string
+		tagNamesByID := entityNameMap(tags)
+
+		if correspondents, listErr := client.ListCorrespondents(ctx); listErr != nil {
+			logger.Warn().Err(listErr).Msg("failed to load correspondents for retrieval context")
+		} else {
+			correspondentsByID = entityNameMap(correspondents)
+		}
+
+		if documentTypes, listErr := client.ListDocumentTypes(ctx); listErr != nil {
+			logger.Warn().Err(listErr).Msg("failed to load document types for retrieval context")
+		} else {
+			documentTypesByID = entityNameMap(documentTypes)
+		}
+
+		similarDocuments, err = p.retrieval.FindSimilarDocuments(ctx, cfg, client, document, extraction.Text, correspondentsByID, documentTypesByID, tagNamesByID)
+		if err != nil {
+			logger.Warn().Err(err).Msg("failed to build embedding-based similar document context; continuing without semantic evidence")
+			similarDocuments = nil
+		} else if len(similarDocuments) > 0 {
+			logger.Info().Int("similar_document_count", len(similarDocuments)).Msg("loaded embedding-based similar document context")
+		}
+	}
+	similarEvidence := BuildClassificationEvidence(similarDocuments)
+
 	stageFailures := make([]string, 0, 5)
 	recordStageFailure := func(stageLabel string, cause error) error {
 		failureMessage := fmt.Sprintf("%s: %v", stageLabel, cause)
@@ -354,6 +445,20 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 					filteredDocuments = append(filteredDocuments, historicalDocument)
 				}
 				historicalDocuments = filteredDocuments
+				if len(similarDocuments) > 0 {
+					similarityByID := make(map[int64]float64, len(similarDocuments))
+					for _, similarDocument := range similarDocuments {
+						similarityByID[similarDocument.Record.DocumentID] = similarDocument.Similarity
+					}
+					sort.SliceStable(historicalDocuments, func(left int, right int) bool {
+						leftScore := similarityByID[historicalDocuments[left].ID]
+						rightScore := similarityByID[historicalDocuments[right].ID]
+						if leftScore != rightScore {
+							return leftScore > rightScore
+						}
+						return historicalDocuments[left].ID > historicalDocuments[right].ID
+					})
+				}
 				logger.Info().Int("historical_document_count", len(historicalDocuments)).Msg("loaded historical documents for correspondent ranking")
 			}
 
@@ -394,7 +499,7 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 			result.Document.DocumentTypeName = resolveNamedEntityName(documentTypes, document.DocumentTypeID, result.Document.DocumentTypeName)
 			logger.Info().Int("available_document_type_count", len(documentTypes)).Msg("loaded document types for suggestion stage")
 
-			suggestion, err := classification.SuggestDocumentType(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, documentTypes)
+			suggestion, err := classification.SuggestDocumentType(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, documentTypes, similarEvidence)
 			if err != nil {
 				result.DocumentType = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
 				if recordErr := recordStageFailure("document type suggestion", err); recordErr != nil {
@@ -421,7 +526,7 @@ func (p *Processor) execute(ctx context.Context, item *QueueItem) (*QueueItem, e
 		if _, err := p.persistQueueProgress(ctx, logger, item, result, cfg.LLMs.DefaultLLM, usedVisionModel); err != nil {
 			return p.failQueueItem(ctx, logger, item, fmt.Sprintf("persist tag progress: %v", err), err, result.Marshal(), cfg.LLMs.DefaultLLM, usedVisionModel)
 		}
-		suggestion, err := classification.SuggestTags(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, tags)
+		suggestion, err := classification.SuggestTags(ctx, cfg.LLMs.OllamaURL, cfg.LLMs.DefaultLLM, processorDocumentName(document, downloaded.Path), extraction.Text, tags, similarEvidence)
 		if err != nil {
 			result.Tags = SuggestionStageResult{Status: stageStatusFailed, Error: err.Error(), UsedModel: cfg.LLMs.DefaultLLM}
 			if recordErr := recordStageFailure("tag suggestion", err); recordErr != nil {
@@ -1010,6 +1115,17 @@ func resolveNamedEntityName[T paperless.NamedEntity](items []T, id *int64, fallb
 		}
 	}
 	return ""
+}
+
+func entityNameMap[T paperless.NamedEntity](items []T) map[int64]string {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make(map[int64]string, len(items))
+	for _, item := range items {
+		result[item.GetID()] = strings.TrimSpace(item.GetName())
+	}
+	return result
 }
 
 func processorDocumentName(document *paperless.Document, downloadedPath string) string {

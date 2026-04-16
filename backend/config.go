@@ -42,9 +42,20 @@ type PaperlessConfig struct {
 }
 
 type LLMConfig struct {
-	OllamaURL  string `json:"ollama_url"`
-	DefaultLLM string `json:"default_llm"`
-	VisionLLM  string `json:"vision_llm"`
+	OllamaURL  string           `json:"ollama_url"`
+	DefaultLLM string           `json:"default_llm"`
+	VisionLLM  string           `json:"vision_llm"`
+	Embeddings EmbeddingsConfig `json:"embeddings"`
+}
+
+type EmbeddingsConfig struct {
+	Enabled                 bool    `json:"enabled"`
+	Model                   string  `json:"model"`
+	SyncIntervalSeconds     int     `json:"sync_interval_seconds"`
+	HistoricalDocumentLimit int     `json:"historical_document_limit"`
+	TopK                    int     `json:"top_k"`
+	SimilarityThreshold     float64 `json:"similarity_threshold"`
+	MaxDocumentsPerRun      int     `json:"max_documents_per_run"`
 }
 
 func DefaultBackendConfig() BackendConfig {
@@ -58,6 +69,14 @@ func DefaultBackendConfig() BackendConfig {
 		},
 		LLMs: LLMConfig{
 			OllamaURL: "http://localhost:11434",
+			Embeddings: EmbeddingsConfig{
+				Enabled:                 false,
+				SyncIntervalSeconds:     120,
+				HistoricalDocumentLimit: 200,
+				TopK:                    6,
+				SimilarityThreshold:     0.35,
+				MaxDocumentsPerRun:      40,
+			},
 		},
 	}
 }
@@ -94,4 +113,21 @@ func (cfg *BackendConfig) Normalize() {
 
 	cfg.LLMs.DefaultLLM = strings.TrimSpace(cfg.LLMs.DefaultLLM)
 	cfg.LLMs.VisionLLM = strings.TrimSpace(cfg.LLMs.VisionLLM)
+	cfg.LLMs.Embeddings.Model = strings.TrimSpace(cfg.LLMs.Embeddings.Model)
+	if cfg.LLMs.Embeddings.SyncIntervalSeconds < 15 {
+		cfg.LLMs.Embeddings.SyncIntervalSeconds = 120
+	}
+
+	if cfg.LLMs.Embeddings.HistoricalDocumentLimit <= 0 {
+		cfg.LLMs.Embeddings.HistoricalDocumentLimit = 200
+	}
+	if cfg.LLMs.Embeddings.TopK <= 0 {
+		cfg.LLMs.Embeddings.TopK = 6
+	}
+	if cfg.LLMs.Embeddings.MaxDocumentsPerRun <= 0 {
+		cfg.LLMs.Embeddings.MaxDocumentsPerRun = 40
+	}
+	if cfg.LLMs.Embeddings.SimilarityThreshold < 0 || cfg.LLMs.Embeddings.SimilarityThreshold > 1 {
+		cfg.LLMs.Embeddings.SimilarityThreshold = 0.35
+	}
 }

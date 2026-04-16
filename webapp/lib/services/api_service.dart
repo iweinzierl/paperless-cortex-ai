@@ -210,4 +210,22 @@ class ApiService {
     final data = jsonDecode(response.body) as List;
     return data.map((e) => DocumentTag.fromJson(e)).toList();
   }
+
+  Future<EmbeddingIndexStats> getEmbeddingStats() async {
+    final response = await http.get(
+      Uri.parse(baseUrl + '/admin/embeddings/stats'),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+    return EmbeddingIndexStats.fromJson(jsonDecode(response.body));
+  }
+
+  Future<EmbeddingReindexResponse> triggerEmbeddingReindex() async {
+    final response = await http.post(
+      Uri.parse(baseUrl + '/admin/embeddings/reindex'),
+      headers: _authHeaders,
+    );
+    await _handleErrors(response);
+    return EmbeddingReindexResponse.fromJson(jsonDecode(response.body));
+  }
 }

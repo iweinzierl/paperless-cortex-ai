@@ -84,9 +84,48 @@ The backend's engine must be configured by users. The configuration is structure
 - **ollama_url** - The URL under which the ollama is accessible.
 - **default_llm** - The default LLM used for recommendation for correspondents, document types and tags.
 - **vision_llm** - The vision LLM (VLM) used for text extraction.
+- **embeddings.enabled** - Enables retrieval from previously indexed Paperless documents. When enabled, the backend builds an embedding index in SQLite and injects the most similar historical documents into correspondent, document type, and tag suggestions.
+- **embeddings.model** - The Ollama embedding model used for `/api/embeddings` requests. This should be a model intended for embeddings, not your chat model.
+- **embeddings.sync_interval_seconds** - How often the background indexer checks Paperless for documents that are missing embeddings or have changed since the last index pass. Minimum accepted value is 15 seconds. Default is 120.
+- **embeddings.historical_document_limit** - How many recent Paperless documents are considered as the source set for indexing and similarity search. Default is 200.
+- **embeddings.top_k** - The maximum number of similar historical documents that are added to the LLM prompt as evidence. Default is 6.
+- **embeddings.similarity_threshold** - Minimum cosine similarity score required before a historical document is used as evidence. Valid range is `0.0` to `1.0`. Default is `0.35`.
+- **embeddings.max_documents_per_run** - The maximum number of stale or missing embeddings the background sync will generate in one pass. Default is 40.
 
 Environment variables:
 - **PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS** - Optional timeout for a single Ollama chat request. Defaults to 120 seconds. Increase this for slower clusters or larger models.
+- **PAPERLESS_AIEXT_OLLAMA_EMBED_TIMEOUT_SECONDS** - Optional timeout for a single Ollama embeddings request. Defaults to 120 seconds. Increase this if embedding generation is slow on your Ollama node.
+
+##### Embeddings-based Retrieval
+When embeddings are enabled, the backend keeps a local index of recent Paperless documents. During processing, the current document is embedded, compared against the indexed library, and the most similar matches are added as structured evidence for metadata suggestion. This is intended to improve consistency when similar invoices, statements, letters, or other recurring document families already exist in your Paperless archive.
+
+Recommended starting configuration:
+
+```json
+{
+	"llms": {
+		"ollama_url": "http://localhost:11434",
+		"default_llm": "qwen2.5:7b",
+		"vision_llm": "llava:13b",
+		"embeddings": {
+			"enabled": true,
+			"model": "nomic-embed-text",
+			"sync_interval_seconds": 120,
+			"historical_document_limit": 200,
+			"top_k": 6,
+			"similarity_threshold": 0.35,
+			"max_documents_per_run": 40
+		}
+	}
+}
+```
+
+Operational notes:
+- Enable embeddings only after `ollama_url`, `paperless_url`, and `paperless_token` are configured, otherwise the indexer has nothing useful to read or nowhere to send embedding requests.
+- The first sync pass may take longer because the backend has to backfill embeddings for existing Paperless documents.
+- Larger `historical_document_limit` values improve recall but increase background indexing work and the size of the local SQLite index.
+- Lower `similarity_threshold` values make the feature more permissive; higher values make it more conservative.
+- The backend exposes authenticated admin endpoints at `/api/admin/embeddings/stats` and `/api/admin/embeddings/reindex` so you can inspect the current index size and trigger a rebuild workflow.
 
 
 ### Features

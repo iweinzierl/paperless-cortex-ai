@@ -70,7 +70,7 @@ func main() {
 		exitWithError(err)
 	}
 
-	suggestion, err := classification.SuggestTags(ctx, ollamaURL, model, filepath.Base(documentPath), extracted.Text, tags)
+	suggestion, err := classification.SuggestTags(ctx, ollamaURL, model, filepath.Base(documentPath), extracted.Text, tags, nil)
 	if err != nil {
 		exitWithError(err)
 	}

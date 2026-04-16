@@ -47,6 +47,7 @@ class DocsScreen extends StatelessWidget {
             bullets: [
               'Set the Paperless URL and token before using queue and metadata features.',
               'Set the Ollama URL plus default and vision models for extraction and suggestions.',
+              'If you enable embeddings retrieval, also set an embedding model and tune the history, sync, and similarity settings.',
               'Choose trigger and process tags so the backend knows which stages should run.',
             ],
           ),

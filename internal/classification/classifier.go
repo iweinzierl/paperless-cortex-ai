@@ -10,6 +10,18 @@ import (
 	"paperless-ai-ext/internal/paperless"
 )
 
+type SimilarDocumentEvidence struct {
+	DocumentID       int64
+	Title            string
+	OriginalFileName string
+	Created          string
+	Correspondent    string
+	DocumentType     string
+	TagNames         []string
+	Snippet          string
+	Similarity       float64
+}
+
 const strictJSONOutputRules = `Output contract:
 - Return exactly one valid JSON object.
 - The first character of your response must be {.
@@ -89,6 +101,8 @@ Rules:
 Valid example:
 {"document_type_id":7,"document_type_name":"Invoice","suggested_new_document_type":null,"confidence":"high","reasoning":"Das Dokument ist eine Lieferantenrechnung."}
 
+%s
+
 Existing document types:
 %s
 
@@ -122,6 +136,8 @@ Rules:
 
 Valid example:
 {"tag_ids":[3,8],"tag_names":["invoice","telecom"],"suggested_new_tags":[],"confidence":"medium","reasoning":"Das Dokument ist eine Telekommunikationsrechnung und beide Tags passen."}
+
+%s
 
 Existing tags:
 %s
@@ -192,8 +208,8 @@ func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, d
 	return ParseCorrespondentSuggestion(response, correspondents)
 }
 
-func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, documentTypes []paperless.DocumentType) (DocumentTypeSuggestion, error) {
-	prompt := fmt.Sprintf(documentTypePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildEntityList(documentTypes, "No existing document types available"), documentName, documentText)
+func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, documentTypes []paperless.DocumentType, similarDocuments []SimilarDocumentEvidence) (DocumentTypeSuggestion, error) {
+	prompt := fmt.Sprintf(documentTypePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildSimilarDocumentsSection(similarDocuments), buildEntityList(documentTypes, "No existing document types available"), documentName, documentText)
 	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return DocumentTypeSuggestion{}, err
@@ -201,8 +217,8 @@ func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, do
 	return ParseDocumentTypeSuggestion(response, documentTypes)
 }
 
-func SuggestTags(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, tags []paperless.Tag) (TagSuggestion, error) {
-	prompt := fmt.Sprintf(tagPromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildEntityList(tags, "No existing tags available"), documentName, documentText)
+func SuggestTags(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, tags []paperless.Tag, similarDocuments []SimilarDocumentEvidence) (TagSuggestion, error) {
+	prompt := fmt.Sprintf(tagPromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildSimilarDocumentsSection(similarDocuments), buildEntityList(tags, "No existing tags available"), documentName, documentText)
 	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
 	if err != nil {
 		return TagSuggestion{}, err
@@ -240,6 +256,56 @@ func buildEntityList[T paperless.NamedEntity](items []T, emptyLabel string) stri
 		builder.WriteString(": ")
 		builder.WriteString(item.GetName())
 		builder.WriteByte('\n')
+	}
+
+	return strings.TrimSpace(builder.String())
+}
+
+func buildSimilarDocumentsSection(items []SimilarDocumentEvidence) string {
+	if len(items) == 0 {
+		return "Similar library documents:\n- No strong semantic matches were found in the indexed library."
+	}
+
+	var builder strings.Builder
+	builder.WriteString("Similar library documents:\n")
+	for _, item := range items {
+		builder.WriteString("- similarity=")
+		builder.WriteString(fmt.Sprintf("%.3f", item.Similarity))
+		builder.WriteString(" | id=")
+		builder.WriteString(strconv.FormatInt(item.DocumentID, 10))
+
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
+			title = strings.TrimSpace(item.OriginalFileName)
+		}
+		if title != "" {
+			builder.WriteString(" | title=")
+			builder.WriteString(title)
+		}
+
+		if correspondent := strings.TrimSpace(item.Correspondent); correspondent != "" {
+			builder.WriteString(" | correspondent=")
+			builder.WriteString(correspondent)
+		}
+		if documentType := strings.TrimSpace(item.DocumentType); documentType != "" {
+			builder.WriteString(" | document_type=")
+			builder.WriteString(documentType)
+		}
+		if len(item.TagNames) > 0 {
+			builder.WriteString(" | tags=")
+			builder.WriteString(strings.Join(item.TagNames, ", "))
+		}
+		if created := strings.TrimSpace(item.Created); created != "" {
+			builder.WriteString(" | created=")
+			builder.WriteString(created)
+		}
+		builder.WriteByte('\n')
+
+		if snippet := strings.TrimSpace(item.Snippet); snippet != "" {
+			builder.WriteString("  Snippet: ")
+			builder.WriteString(snippet)
+			builder.WriteByte('\n')
+		}
 	}
 
 	return strings.TrimSpace(builder.String())

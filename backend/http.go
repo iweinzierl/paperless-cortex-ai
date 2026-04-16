@@ -134,6 +134,17 @@ type documentProcessHistoryResponse struct {
 	Items         []QueueItem `json:"items"`
 }
 
+type embeddingIndexStatsResponse struct {
+	Enabled         bool  `json:"enabled"`
+	IndexedDocCount int   `json:"indexed_doc_count"`
+	LastSyncTimeMS  int64 `json:"last_sync_time_ms"`
+}
+
+type embeddingReindexResponse struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
 func NewServer(store *Store, processor *Processor, logger zerolog.Logger, sharedSecret string) *Server {
 	return &Server{
 		store:        store,
@@ -170,6 +181,8 @@ func (s *Server) Router() *gin.Engine {
 	authenticated.GET("/dashboard", s.handleDashboard)
 	authenticated.GET("/models", s.handleListModels)
 	authenticated.GET("/paperless/tags", s.handleListPaperlessTags)
+	authenticated.GET("/admin/embeddings/stats", s.handleGetEmbeddingStats)
+	authenticated.POST("/admin/embeddings/reindex", s.handleReindexEmbeddings)
 
 	return router
 }
@@ -726,6 +739,50 @@ func (s *Server) handlePaperlessWebhook(c *gin.Context) {
 
 	logEvent.Bool("reused", false).Int64("queue_item_id", item.ID).Msg("queued paperless webhook")
 	c.JSON(http.StatusAccepted, gin.H{"item": item, "reused": false})
+}
+
+func (s *Server) handleGetEmbeddingStats(c *gin.Context) {
+	cfg, err := s.store.LoadConfig(c.Request.Context())
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	indexedCount, lastSyncTimeMS, err := s.store.GetEmbeddingIndexStats(c.Request.Context())
+	if err != nil {
+		s.writeInternalError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, embeddingIndexStatsResponse{
+		Enabled:         cfg.LLMs.Embeddings.Enabled,
+		IndexedDocCount: indexedCount,
+		LastSyncTimeMS:  lastSyncTimeMS,
+	})
+}
+
+func (s *Server) handleReindexEmbeddings(c *gin.Context) {
+	retrieval := s.processor.GetRetrievalService()
+	if retrieval == nil {
+		c.JSON(http.StatusInternalServerError, embeddingReindexResponse{
+			Status: "error",
+			Error:  "retrieval service not available",
+		})
+		return
+	}
+
+	if err := retrieval.ClearAllEmbeddings(c.Request.Context()); err != nil {
+		s.logger.Error().Err(err).Msg("failed to clear embedding index")
+		c.JSON(http.StatusInternalServerError, embeddingReindexResponse{
+			Status: "error",
+			Error:  fmt.Sprintf("failed to clear index: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, embeddingReindexResponse{
+		Status: "reindex_triggered",
+	})
 }
 
 func (s *Server) authMiddleware() gin.HandlerFunc {

@@ -58,7 +58,7 @@ func main() {
 		exitWithError(err)
 	}
 
-	suggestion, err := classification.SuggestDocumentType(ctx, ollamaURL, model, filepath.Base(documentPath), extracted.Text, documentTypes)
+	suggestion, err := classification.SuggestDocumentType(ctx, ollamaURL, model, filepath.Base(documentPath), extracted.Text, documentTypes, nil)
 	if err != nil {
 		exitWithError(err)
 	}
