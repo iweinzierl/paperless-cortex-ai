@@ -10,6 +10,67 @@ import (
 	"paperless-ai-ext/internal/paperless"
 )
 
+var correspondentSuggestionSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"correspondent_id":            map[string]any{"type": []string{"integer", "null"}},
+		"correspondent_name":          map[string]any{"type": []string{"string", "null"}},
+		"suggested_new_correspondent": map[string]any{"type": []string{"string", "null"}},
+		"confidence":                  map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+		"reasoning":                   map[string]any{"type": "string"},
+	},
+	"required":             []string{"correspondent_id", "correspondent_name", "suggested_new_correspondent", "confidence", "reasoning"},
+	"additionalProperties": false,
+}
+
+var documentTypeSuggestionSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"document_type_id":            map[string]any{"type": []string{"integer", "null"}},
+		"document_type_name":          map[string]any{"type": []string{"string", "null"}},
+		"suggested_new_document_type": map[string]any{"type": []string{"string", "null"}},
+		"confidence":                  map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+		"reasoning":                   map[string]any{"type": "string"},
+	},
+	"required":             []string{"document_type_id", "document_type_name", "suggested_new_document_type", "confidence", "reasoning"},
+	"additionalProperties": false,
+}
+
+var tagSuggestionSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"tag_ids":            map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+		"tag_names":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"suggested_new_tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"confidence":         map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+		"reasoning":          map[string]any{"type": "string"},
+	},
+	"required":             []string{"tag_ids", "tag_names", "suggested_new_tags", "confidence", "reasoning"},
+	"additionalProperties": false,
+}
+
+var createdDateSuggestionSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"created":    map[string]any{"type": []string{"string", "null"}},
+		"confidence": map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+		"reasoning":  map[string]any{"type": "string"},
+	},
+	"required":             []string{"created", "confidence", "reasoning"},
+	"additionalProperties": false,
+}
+
+var titleSuggestionSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"title":      map[string]any{"type": "string"},
+		"confidence": map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+		"reasoning":  map[string]any{"type": "string"},
+	},
+	"required":             []string{"title", "confidence", "reasoning"},
+	"additionalProperties": false,
+}
+
 type SimilarDocumentEvidence struct {
 	DocumentID       int64
 	Title            string
@@ -199,49 +260,81 @@ Current title or source name: %s
 Document text:
 %s`
 
+const structuredRetryPromptTemplate = `Your previous answer for this same task did not satisfy the required JSON contract.
+
+Validation error:
+%s
+
+Re-answer the original task now.
+
+Rules:
+- Return exactly one valid JSON object that satisfies the schema for this request.
+- Do not include markdown, code fences, or any text before or after the JSON object.
+- Follow the original task instructions, candidate lists, and response-language rules.
+- If you are uncertain, keep confidence low and use null or [] where the schema permits it.
+- Do not summarize the document outside the JSON object.`
+
+func runStructuredSuggestion[T any](ctx context.Context, ollamaURL string, model string, prompt string, schema any, parser func(string) (T, error)) (T, error) {
+	messages := []ollama.Message{{Role: "user", Content: prompt}}
+	response, err := ollama.RunWithFormat(ctx, ollamaURL, model, messages, schema)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+
+	parsed, err := parser(response)
+	if err == nil {
+		return parsed, nil
+	}
+
+	repairMessages := append(messages,
+		ollama.Message{Role: "assistant", Content: response},
+		ollama.Message{Role: "user", Content: fmt.Sprintf(structuredRetryPromptTemplate, err.Error())},
+	)
+	repairedResponse, repairErr := ollama.RunWithFormat(ctx, ollamaURL, model, repairMessages, schema)
+	if repairErr != nil {
+		var zero T
+		return zero, fmt.Errorf("parse structured LLM response: %v; repair retry failed: %w", err, repairErr)
+	}
+
+	repaired, repairParseErr := parser(repairedResponse)
+	if repairParseErr != nil {
+		var zero T
+		return zero, fmt.Errorf("parse structured LLM response: %v; repaired response invalid: %w", err, repairParseErr)
+	}
+
+	return repaired, nil
+}
+
 func SuggestCorrespondent(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, correspondents []paperless.Correspondent, historicalDocuments []paperless.Document) (CorrespondentSuggestion, error) {
 	prompt := buildCorrespondentPrompt(documentName, documentText, correspondents, historicalDocuments)
-	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
-	if err != nil {
-		return CorrespondentSuggestion{}, err
-	}
-	return ParseCorrespondentSuggestion(response, correspondents)
+	return runStructuredSuggestion(ctx, ollamaURL, model, prompt, correspondentSuggestionSchema, func(raw string) (CorrespondentSuggestion, error) {
+		return ParseCorrespondentSuggestion(raw, correspondents)
+	})
 }
 
 func SuggestDocumentType(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, documentTypes []paperless.DocumentType, similarDocuments []SimilarDocumentEvidence) (DocumentTypeSuggestion, error) {
 	prompt := fmt.Sprintf(documentTypePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildSimilarDocumentsSection(similarDocuments), buildEntityList(documentTypes, "No existing document types available"), documentName, documentText)
-	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
-	if err != nil {
-		return DocumentTypeSuggestion{}, err
-	}
-	return ParseDocumentTypeSuggestion(response, documentTypes)
+	return runStructuredSuggestion(ctx, ollamaURL, model, prompt, documentTypeSuggestionSchema, func(raw string) (DocumentTypeSuggestion, error) {
+		return ParseDocumentTypeSuggestion(raw, documentTypes)
+	})
 }
 
 func SuggestTags(ctx context.Context, ollamaURL string, model string, documentName string, documentText string, tags []paperless.Tag, similarDocuments []SimilarDocumentEvidence) (TagSuggestion, error) {
 	prompt := fmt.Sprintf(tagPromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, buildSimilarDocumentsSection(similarDocuments), buildEntityList(tags, "No existing tags available"), documentName, documentText)
-	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
-	if err != nil {
-		return TagSuggestion{}, err
-	}
-	return ParseTagSuggestion(response, tags)
+	return runStructuredSuggestion(ctx, ollamaURL, model, prompt, tagSuggestionSchema, func(raw string) (TagSuggestion, error) {
+		return ParseTagSuggestion(raw, tags)
+	})
 }
 
 func SuggestCreatedDate(ctx context.Context, ollamaURL string, model string, documentName string, documentText string) (CreatedDateSuggestion, error) {
 	prompt := fmt.Sprintf(createdDatePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, documentName, documentText)
-	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
-	if err != nil {
-		return CreatedDateSuggestion{}, err
-	}
-	return ParseCreatedDateSuggestion(response)
+	return runStructuredSuggestion(ctx, ollamaURL, model, prompt, createdDateSuggestionSchema, ParseCreatedDateSuggestion)
 }
 
 func SuggestTitle(ctx context.Context, ollamaURL string, model string, documentName string, documentText string) (TitleSuggestion, error) {
 	prompt := fmt.Sprintf(titlePromptTemplate, strictJSONOutputRules+"\n"+germanResponseRules, documentName, documentText)
-	response, err := ollama.Run(ctx, ollamaURL, model, ollama.Message{Role: "user", Content: prompt})
-	if err != nil {
-		return TitleSuggestion{}, err
-	}
-	return ParseTitleSuggestion(response)
+	return runStructuredSuggestion(ctx, ollamaURL, model, prompt, titleSuggestionSchema, ParseTitleSuggestion)
 }
 
 func buildEntityList[T paperless.NamedEntity](items []T, emptyLabel string) string {

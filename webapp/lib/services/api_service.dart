@@ -64,7 +64,7 @@ class ApiService {
 
   Future<Session> login(String username, String password) async {
     final response = await http.post(
-      Uri.parse(baseUrl + '/auth/login'),
+      Uri.parse('$baseUrl/auth/login'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'username': username, 'password': password}),
     );
@@ -85,17 +85,14 @@ class ApiService {
 
   Future<void> logout() async {
     try {
-      await http.post(
-        Uri.parse(baseUrl + '/auth/logout'),
-        headers: _authHeaders,
-      );
+      await http.post(Uri.parse('$baseUrl/auth/logout'), headers: _authHeaders);
     } catch (_) {}
     await _prefs?.remove('auth_token');
   }
 
   Future<Session> getMe() async {
     final response = await http.get(
-      Uri.parse(baseUrl + '/auth/me'),
+      Uri.parse('$baseUrl/auth/me'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -104,7 +101,7 @@ class ApiService {
 
   Future<SystemStatusModel> getSystemStatus() async {
     final response = await http.get(
-      Uri.parse(baseUrl + '/status'),
+      Uri.parse('$baseUrl/status'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -113,7 +110,7 @@ class ApiService {
 
   Future<DashboardStats> getDashboard() async {
     final response = await http.get(
-      Uri.parse(baseUrl + '/dashboard'),
+      Uri.parse('$baseUrl/dashboard'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -122,7 +119,7 @@ class ApiService {
 
   Future<BackendConfig> getConfig() async {
     final response = await http.get(
-      Uri.parse(baseUrl + '/config'),
+      Uri.parse('$baseUrl/config'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -131,7 +128,7 @@ class ApiService {
 
   Future<BackendConfig> putConfig(BackendConfig config) async {
     final response = await http.put(
-      Uri.parse(baseUrl + '/config'),
+      Uri.parse('$baseUrl/config'),
       headers: _authHeaders,
       body: jsonEncode(config.toJson()),
     );
@@ -143,7 +140,7 @@ class ApiService {
     var qs = '?limit=${limit.toString()}';
     if (status != null && status.isNotEmpty) qs += '&status=$status';
     final response = await http.get(
-      Uri.parse('${baseUrl}/queue${qs}'),
+      Uri.parse('$baseUrl/queue$qs'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -158,7 +155,7 @@ class ApiService {
   }) async {
     final response = await http.get(
       Uri.parse(
-        '${baseUrl}/documents/${documentId.toString()}/processes?limit=${limit.toString()}',
+        '$baseUrl/documents/${documentId.toString()}/processes?limit=${limit.toString()}',
       ),
       headers: _authHeaders,
     );
@@ -168,7 +165,7 @@ class ApiService {
 
   Future<QueueItem> processQueueItem(int id) async {
     final response = await http.post(
-      Uri.parse(baseUrl + '/queue/' + id.toString() + '/process'),
+      Uri.parse('$baseUrl/queue/$id/process'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -177,7 +174,7 @@ class ApiService {
 
   Future<QueueItem> applyQueueItem(int id) async {
     final response = await http.post(
-      Uri.parse(baseUrl + '/queue/' + id.toString() + '/apply'),
+      Uri.parse('$baseUrl/queue/$id/apply'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -186,7 +183,7 @@ class ApiService {
 
   Future<void> deleteQueueItem(int id) async {
     final response = await http.delete(
-      Uri.parse(baseUrl + '/queue/' + id.toString()),
+      Uri.parse('$baseUrl/queue/$id'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -194,7 +191,7 @@ class ApiService {
 
   Future<OllamaModelsResponse> getModels() async {
     final response = await http.get(
-      Uri.parse(baseUrl + '/models'),
+      Uri.parse('$baseUrl/models'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -203,7 +200,7 @@ class ApiService {
 
   Future<List<DocumentTag>> getPaperlessTags() async {
     final response = await http.get(
-      Uri.parse(baseUrl + '/paperless/tags'),
+      Uri.parse('$baseUrl/paperless/tags'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -213,7 +210,7 @@ class ApiService {
 
   Future<EmbeddingIndexStats> getEmbeddingStats() async {
     final response = await http.get(
-      Uri.parse(baseUrl + '/admin/embeddings/stats'),
+      Uri.parse('$baseUrl/admin/embeddings/stats'),
       headers: _authHeaders,
     );
     await _handleErrors(response);
@@ -222,7 +219,7 @@ class ApiService {
 
   Future<EmbeddingReindexResponse> triggerEmbeddingReindex() async {
     final response = await http.post(
-      Uri.parse(baseUrl + '/admin/embeddings/reindex'),
+      Uri.parse('$baseUrl/admin/embeddings/reindex'),
       headers: _authHeaders,
     );
     await _handleErrors(response);

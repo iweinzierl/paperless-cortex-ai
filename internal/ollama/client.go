@@ -27,6 +27,7 @@ type chatRequest struct {
 	Model    string         `json:"model"`
 	Stream   bool           `json:"stream"`
 	Messages []Message      `json:"messages"`
+	Format   any            `json:"format,omitempty"`
 	Options  map[string]any `json:"options,omitempty"`
 }
 
@@ -56,13 +57,18 @@ func defaultChatOptions() map[string]any {
 }
 
 func Run(parent context.Context, ollamaURL string, model string, message Message) (string, error) {
+	return RunWithFormat(parent, ollamaURL, model, []Message{message}, nil)
+}
+
+func RunWithFormat(parent context.Context, ollamaURL string, model string, messages []Message, format any) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, chatTimeout())
 	defer cancel()
 
 	requestBody := chatRequest{
 		Model:    model,
 		Stream:   false,
-		Messages: []Message{message},
+		Messages: messages,
+		Format:   format,
 		Options:  defaultChatOptions(),
 	}
 

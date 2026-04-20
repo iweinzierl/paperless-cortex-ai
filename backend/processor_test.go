@@ -16,6 +16,17 @@ import (
 	"github.com/rs/zerolog"
 )
 
+func readChatRequest(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode ollama request payload: %v", err)
+	}
+
+	return payload
+}
+
 func writeImplicitSuggestionResponse(w http.ResponseWriter, requestBody []byte) bool {
 	payload := string(requestBody)
 	w.Header().Set("Content-Type", "application/json")
@@ -43,12 +54,25 @@ func TestProcessorProcessesDocumentTypeSuggestion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read ollama request: %v", err)
 		}
+		payload := readChatRequest(t, body)
 		if writeImplicitSuggestionResponse(w, body) {
 			return
 		}
 		ollamaRequests++
-		if !strings.Contains(string(body), "Invoice text from processor test") {
-			t.Fatalf("expected document text in ollama request, got %s", string(body))
+		requestJSON := string(body)
+		if !strings.Contains(requestJSON, "Invoice text from processor test") {
+			t.Fatalf("expected document text in ollama request, got %s", requestJSON)
+		}
+		format, ok := payload["format"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected structured output schema in ollama request, got %+v", payload["format"])
+		}
+		properties, ok := format["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected schema properties in ollama request, got %+v", format)
+		}
+		if _, ok := properties["document_type_id"]; !ok {
+			t.Fatalf("expected document_type_id in schema properties, got %+v", properties)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

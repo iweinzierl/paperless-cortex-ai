@@ -55,6 +55,57 @@ func TestRunSendsDeterministicOptions(t *testing.T) {
 	}
 }
 
+func TestRunWithFormatSendsStructuredOutputSchema(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+
+		var payload struct {
+			Format map[string]any `json:"format"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode request payload: %v", err)
+		}
+		if payload.Format["type"] != "object" {
+			t.Fatalf("expected object schema, got %+v", payload.Format)
+		}
+
+		properties, ok := payload.Format["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected schema properties, got %+v", payload.Format["properties"])
+		}
+		if _, ok := properties["title"]; !ok {
+			t.Fatalf("expected title property in schema, got %+v", properties)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"title\":\"ok\",\"confidence\":\"high\",\"reasoning\":\"test\"}"}}`))
+	}))
+	defer testServer.Close()
+
+	result, err := RunWithFormat(t.Context(), testServer.URL, "llama3.2", []Message{{Role: "user", Content: "hello"}}, map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title":      map[string]any{"type": "string"},
+			"confidence": map[string]any{"type": "string"},
+			"reasoning":  map[string]any{"type": "string"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run structured chat request: %v", err)
+	}
+	if result == "" {
+		t.Fatal("expected non-empty response")
+	}
+}
+
 func TestChatTimeoutUsesDefaultWhenUnsetOrInvalid(t *testing.T) {
 	t.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", "")
 	if got := chatTimeout(); got != defaultChatTimeout {

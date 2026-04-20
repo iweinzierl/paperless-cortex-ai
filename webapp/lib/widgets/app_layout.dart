@@ -11,7 +11,7 @@ import 'package:webapp/theme.dart';
 class AppLayout extends StatefulWidget {
   final Widget child;
 
-  const AppLayout({Key? key, required this.child}) : super(key: key);
+  const AppLayout({super.key, required this.child});
 
   @override
   State<AppLayout> createState() => _AppLayoutState();
@@ -77,7 +77,7 @@ class _AppLayoutState extends State<AppLayout> {
 class SideNavBar extends StatelessWidget {
   final SystemStatusModel? status;
 
-  const SideNavBar({Key? key, required this.status}) : super(key: key);
+  const SideNavBar({super.key, required this.status});
 
   @override
   Widget build(BuildContext context) {
@@ -223,12 +223,11 @@ class _NavItem extends StatelessWidget {
   final VoidCallback onTap;
 
   const _NavItem({
-    Key? key,
     required this.icon,
     required this.title,
     required this.active,
     required this.onTap,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -274,7 +273,7 @@ class _NavItem extends StatelessWidget {
 class TopNavBar extends StatelessWidget {
   final SystemStatusModel? status;
 
-  const TopNavBar({Key? key, required this.status}) : super(key: key);
+  const TopNavBar({super.key, required this.status});
 
   @override
   Widget build(BuildContext context) {

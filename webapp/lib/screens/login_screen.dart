@@ -47,8 +47,9 @@ class _LoginScreenState extends State<LoginScreen> {
     } on ApiException catch (e) {
       if (mounted) setState(() => _errorMessage = e.message);
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() => _errorMessage = 'An unexpected error occurred.');
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
