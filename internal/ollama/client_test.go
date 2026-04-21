@@ -106,6 +106,48 @@ func TestRunWithFormatSendsStructuredOutputSchema(t *testing.T) {
 	}
 }
 
+func TestRunWithFormatDumpsSystemAndUserPrompts(t *testing.T) {
+	dumpDir := t.TempDir()
+	t.Setenv("PAPERLESS_AIEXT_PROMPT_DUMP_DIR", dumpDir)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"ok"}}`))
+	}))
+	defer testServer.Close()
+
+	_, err := RunWithFormat(t.Context(), testServer.URL, "llama3.2", []Message{
+		{Role: "system", Content: "system instructions"},
+		{Role: "user", Content: "first user prompt"},
+		{Role: "assistant", Content: "assistant reply"},
+		{Role: "user", Content: "repair prompt"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("run chat request: %v", err)
+	}
+
+	systemPrompt, err := os.ReadFile(dumpDir + "/system.prompt")
+	if err != nil {
+		t.Fatalf("read system prompt dump: %v", err)
+	}
+	if string(systemPrompt) != "system instructions" {
+		t.Fatalf("unexpected system prompt dump: %q", string(systemPrompt))
+	}
+
+	userPrompt, err := os.ReadFile(dumpDir + "/user.prompt")
+	if err != nil {
+		t.Fatalf("read user prompt dump: %v", err)
+	}
+	if string(userPrompt) != "first user prompt\n\n---\n\nrepair prompt" {
+		t.Fatalf("unexpected user prompt dump: %q", string(userPrompt))
+	}
+}
+
 func TestChatTimeoutUsesDefaultWhenUnsetOrInvalid(t *testing.T) {
 	t.Setenv("PAPERLESS_AIEXT_OLLAMA_TIMEOUT_SECONDS", "")
 	if got := chatTimeout(); got != defaultChatTimeout {

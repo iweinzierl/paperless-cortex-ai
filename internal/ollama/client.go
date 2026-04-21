@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -49,10 +51,11 @@ type embeddingResponse struct {
 
 func defaultChatOptions() map[string]any {
 	return map[string]any{
-		"temperature": 0,
+		"temperature": 0.2,
 		"top_k":       1,
 		"top_p":       0,
 		"seed":        1,
+		"num_ctx":     16384,
 	}
 }
 
@@ -76,6 +79,8 @@ func RunWithFormat(parent context.Context, ollamaURL string, model string, messa
 	if err != nil {
 		return "", fmt.Errorf("marshal ollama request: %w", err)
 	}
+
+	dumpPromptFiles(messages)
 
 	endpoint := strings.TrimRight(ollamaURL, "/") + "/api/chat"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
@@ -198,4 +203,50 @@ func embeddingTimeout() time.Duration {
 	}
 
 	return time.Duration(seconds) * time.Second
+}
+
+func dumpPromptFiles(messages []Message) {
+	dumpDir, err := promptDumpDir()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(dumpDir, 0o755); err != nil {
+		return
+	}
+
+	if err := os.WriteFile(filepath.Join(dumpDir, "system.prompt"), []byte(joinPromptContent(messages, "system")), 0o644); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dumpDir, "user.prompt"), []byte(joinPromptContent(messages, "user")), 0o644)
+}
+
+func promptDumpDir() (string, error) {
+	override := strings.TrimSpace(os.Getenv("PAPERLESS_AIEXT_PROMPT_DUMP_DIR"))
+	if override != "" {
+		return override, nil
+	}
+
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", errors.New("resolve source location")
+	}
+
+	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "backend", "data")), nil
+}
+
+func joinPromptContent(messages []Message, role string) string {
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), role) {
+			continue
+		}
+
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		parts = append(parts, content)
+	}
+
+	return strings.Join(parts, "\n\n---\n\n")
 }
